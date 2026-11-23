@@ -1,0 +1,14 @@
+[
+  {
+    "clientId": "queens-book-club",
+    "name": "Queens Book Club",
+    "clientSecret": "replace-with-a-long-random-secret",
+    "redirectUris": ["https://queensbookclub.example/auth/callback"],
+    "grantee": "0x0000000000000000000000000000000000000000",
+    "grantDays": 90,
+    "permissions": [
+      { "label": "Post and reply as you", "target": "0x0000000000000000000000000000000000000000", "selector": "0x00000000" },
+      { "label": "Follow people as you", "target": "0x0000000000000000000000000000000000000000", "selector": "0x00000000" }
+    ]
+  }
+]

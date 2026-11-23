@@ -13,3 +13,6 @@ contracts/broadcast/
 
 # Local development state
 .data/
+
+# Written by scripts/dev-setup.mjs for the local chain.
+clubs.json
