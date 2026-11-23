@@ -2,11 +2,11 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { type Adapter, type AdapterPayload, type Configuration, Provider, interactionPolicy } from "oidc-provider";
 import type { Address } from "viem";
-import { SESSION_TTL, findSession, parseCookies, randomId } from "./auth.ts";
+import { SESSION_TTL, randomId } from "./auth.ts";
 import type { Chain } from "./chain.ts";
 import { type Club, readGrant } from "./clubs.ts";
 import type { Config } from "./config.ts";
-import { now, setting, userById } from "./db.ts";
+import { now, setting } from "./db.ts";
 
 /** Keeps oidc-provider's records (sessions, interactions, authorization codes) in the Passport's database. */
 function sqliteAdapter(db: DatabaseSync) {
@@ -82,15 +82,21 @@ function newSigningKey(): string {
  * The sign-in protocol: OpenID Connect by redirect, authorization code with PKCE. An app gets one thing from it,
  * an ID token whose `sub` is the member's Lens Account.
  */
-export function createProvider(config: Config, db: DatabaseSync, clubs: Map<string, Club>, chain: Chain): Provider {
+export function createProvider(
+  config: Config,
+  db: DatabaseSync,
+  clubs: Map<string, Club>,
+  chain: Chain,
+  /** The Lens Account a browser is signed in to the Passport as, from its cookies. */
+  signedInAccount: (cookies: string | undefined) => Promise<Address | undefined>,
+): Provider {
   // oidc-provider keeps a session of its own. The Passport's session is the one that counts: when it has ended,
   // or belongs to someone else, the member signs in again whatever oidc-provider remembers.
   const policy = interactionPolicy.base();
   policy.get("login")?.checks.add(
-    new interactionPolicy.Check("passport_session", "the member is not signed in to the Passport", (ctx) => {
-      const session = findSession(db, parseCookies(ctx.req.headers.cookie).pp_session);
-      const user = session && userById(db, session.userId);
-      return !user || user.account !== ctx.oidc.session?.accountId;
+    new interactionPolicy.Check("passport_session", "the member is not signed in to the Passport", async (ctx) => {
+      const account = await signedInAccount(ctx.req.headers.cookie);
+      return !account || account !== ctx.oidc.session?.accountId;
     }),
   );
 

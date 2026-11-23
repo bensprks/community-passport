@@ -94,11 +94,19 @@ const actions: Record<string, (button: HTMLElement) => Promise<string>> = {
 
   /** Disconnect an app: sign the revocation with the passkey-derived key. */
   async revoke(button) {
-    const client = button.dataset.client;
-    const typedData = await (await fetch(`/account/revoke-request?client=${encodeURIComponent(client ?? "")}`)).json();
+    const grantee = button.dataset.grantee;
+    const typedData = await (await fetch(`/account/revoke-request?grantee=${encodeURIComponent(grantee ?? "")}`)).json();
     const signature = await withExistingPasskey((account) => account.signTypedData(reviveTypedData(typedData)));
     const { nonce, deadline } = typedData.message;
-    return (await postJson("/account/revoke", { client, nonce: String(nonce), deadline: String(deadline), signature })).redirect;
+    return (await postJson("/account/revoke", { grantee, nonce: String(nonce), deadline: String(deadline), signature })).redirect;
+  },
+
+  /** Disconnect every app at once: sign the message that ends every grant on the account. */
+  async revokeAll() {
+    const typedData = await (await fetch("/account/revoke-all-request")).json();
+    const signature = await withExistingPasskey((account) => account.signTypedData(reviveTypedData(typedData)));
+    const { nonce, deadline } = typedData.message;
+    return (await postJson("/account/disconnect-all", { nonce: String(nonce), deadline: String(deadline), signature })).redirect;
   },
 };
 

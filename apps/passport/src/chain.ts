@@ -9,6 +9,7 @@ import {
   getAddress,
   http,
   parseAbi,
+  parseAbiItem,
   parseEventLogs,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -25,6 +26,8 @@ export const lensAbi = parseAbi([
   "function transferOwnership(address newOwner)",
   "function isAccountManager(address accountManager) view returns (bool)",
 ]);
+
+const grantedEvent = parseAbiItem("event Granted(address indexed account, address indexed grantee, bytes32 indexed scopeId, uint64 expiry)");
 
 /** Where a Lens Account's proxy keeps the address of its proxy admin (the ERC-1967 admin slot). */
 const PROXY_ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
@@ -50,6 +53,8 @@ export type SignedGrant = {
 };
 
 export type SignedRevoke = { account: Address; grantee: Address; nonce: bigint; deadline: bigint; signature: Hex };
+
+export type SignedRevokeAll = { account: Address; nonce: bigint; deadline: bigint; signature: Hex };
 
 export type Chain = ReturnType<typeof createChain>;
 
@@ -110,6 +115,34 @@ export function createChain(config: Config) {
       });
     },
 
+    /**
+     * The Account the factory created for `owner`, if it did. This is how a creation whose outcome was never
+     * heard (a dropped connection, a restart) is found again.
+     */
+    async accountCreatedFor(owner: Address): Promise<Address | undefined> {
+      const logs = await publicClient.getContractEvents({
+        address: config.accountFactory,
+        abi: lensAbi,
+        eventName: "Lens_Account_Created",
+        args: { owner },
+        fromBlock: "earliest",
+      });
+      return logs.at(-1)?.args.account;
+    },
+
+    async isRegistryManager(account: Address): Promise<boolean> {
+      return publicClient.readContract({ address: account, abi: lensAbi, functionName: "isAccountManager", args: [config.grantRegistry] });
+    },
+
+    /**
+     * Every key that was ever granted anything on `account`, from the registry's own events. In production this
+     * question goes to an indexer: a node will not scan its whole history on request.
+     */
+    async granteesOf(account: Address): Promise<Address[]> {
+      const logs = await publicClient.getLogs({ address: config.grantRegistry, event: grantedEvent, args: { account }, fromBlock: "earliest" });
+      return [...new Set(logs.map((log) => getAddress(log.args.grantee as Address)))];
+    },
+
     async ownerOf(account: Address): Promise<Address> {
       return publicClient.readContract({ address: account, abi: lensAbi, functionName: "owner" });
     },
@@ -153,6 +186,17 @@ export function createChain(config: Config) {
           ...registry,
           functionName: "revokeWithSig",
           args: [revoke.account, revoke.grantee, revoke.nonce, revoke.deadline, revoke.signature],
+        });
+        await mined(hash);
+      });
+    },
+
+    async submitRevokeAll(revoke: SignedRevokeAll): Promise<void> {
+      await inTurn(async () => {
+        const hash = await relayerClient.writeContract({
+          ...registry,
+          functionName: "revokeAllWithSig",
+          args: [revoke.account, revoke.nonce, revoke.deadline, revoke.signature],
         });
         await mined(hash);
       });

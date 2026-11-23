@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { Server } from "node:http";
 import { createServer } from "node:net";
 import { after, before, describe, test } from "node:test";
-import { grantRegistryAbi, hashScopes } from "@community-passport/grants";
+import { grantRegistryAbi, grantTypedData, hashScopes } from "@community-passport/grants";
 import {
   type Chain,
   type Config,
@@ -21,6 +21,7 @@ import {
   lensAbi,
   openDb,
   parseClubs,
+  policySettings,
 } from "@community-passport/passport";
 import {
   type Abi,
@@ -32,6 +33,7 @@ import {
   encodeFunctionData,
   http,
   isAddressEqual,
+  parseEther,
   parseEventLogs,
   toFunctionSelector,
   toHex,
@@ -55,7 +57,7 @@ const selectorOf = (abi: Abi, name: string) =>
 
 const base64url = (bytes: Buffer) => bytes.toString("base64url");
 /** The one thing the test club asks for that a member may leave out. */
-const DELETE_ANY = "Delete any of your posts, including ones made in other apps";
+const DELETE_ANY = "Delete your posts in the club's feed";
 
 class Outbox implements Mailer {
   readonly codes = new Map<string, string>();
@@ -78,10 +80,23 @@ describe("a club signs a member in through the Passport and acts for them on Len
   const graphAbi = loadAbi("IGraph");
   const club = privateKeyToAccount(CLUB_KEY);
   const redirectUri = "http://127.0.0.1:5001/callback";
+  /** A second address the club registered, on another domain. */
+  const otherRedirectUri = "http://localhost:5002/callback";
   const email = `maya-${Date.now()}@example.com`;
   const outbox = new Outbox();
 
-  let local: { chainId: number; rpcUrl: string; grantRegistry: Address; accountFactory: Address; feed: Address; graph: Address };
+  let local: {
+    chainId: number;
+    rpcUrl: string;
+    grantRegistry: Address;
+    accountFactory: Address;
+    /** The feed every app shares. */
+    feed: Address;
+    graph: Address;
+    /** The club's own feed, which is the one its grants name. */
+    clubFeed: Address;
+  };
+  let localChain: ReturnType<typeof defineChain>;
   let config: Config;
   let chain: Chain;
   let server: Server;
@@ -94,6 +109,8 @@ describe("a club signs a member in through the Passport and acts for them on Len
   const passkeyKey = privateKeyToAccount(generatePrivateKey());
   /** Makes the key store's next transaction fail, either before it is sent or after it went through. */
   let breakNextTransfer: { to: Address; when: "before" | "after" } | undefined;
+  /** Makes the next Account creation go through on the chain and then fail, as if the answer never arrived. */
+  let breakNextCreation = false;
 
   before(async () => {
     assert.ok(existsSync(localFile), "No local chain found. Run `pnpm chain` in another terminal first.");
@@ -107,7 +124,7 @@ describe("a club signs a member in through the Passport and acts for them on Len
       rpcUrl: local.rpcUrl,
       grantRegistry: local.grantRegistry,
       accountFactory: local.accountFactory,
-      scopeTargets: [local.feed, local.graph],
+      scopeTargets: [local.feed, local.graph, local.clubFeed],
       relayerKey: RELAYER_KEY,
       keyStoreSecret: "e2e",
       clubsFile: "",
@@ -122,20 +139,20 @@ describe("a club signs a member in through the Passport and acts for them on Len
           clientId: "queens-book-club",
           name: "Queens Book Club",
           clientSecret: "e2e-secret",
-          redirectUris: [redirectUri],
+          redirectUris: [redirectUri, otherRedirectUri],
           grantee: club.address,
           grantDays: 90,
           permissions: [
-            { label: "Post as you", target: local.feed, selector: selectorOf(feedAbi, "createPost") },
+            { label: "Post as you", target: local.clubFeed, selector: selectorOf(feedAbi, "createPost") },
             { label: "Follow people as you", target: local.graph, selector: selectorOf(graphAbi, "follow") },
-            { label: DELETE_ANY, target: local.feed, selector: selectorOf(feedAbi, "deletePost"), optional: true },
+            { label: DELETE_ANY, target: local.clubFeed, selector: selectorOf(feedAbi, "deletePost"), optional: true },
           ],
         },
       ]),
       config.scopeTargets,
     );
     // The real key store, with a way to cut a transaction short like a crash or a dropped connection would.
-    const store = new LocalKeyStore(db, chain, config.keyStoreSecret, config);
+    const store = new LocalKeyStore(db, chain, config.keyStoreSecret, policySettings(config.chainId, config.grantRegistry, clubs));
     const keyStore: KeyStore = {
       create: (userId) => store.create(userId),
       signTypedData: (userId, typedData, member) => store.signTypedData(userId, typedData, member),
@@ -148,19 +165,27 @@ describe("a club signs a member in through the Passport and acts for them on Len
         if (failure?.when === "after") throw new Error("simulated: the connection dropped after the transaction went through");
       },
     };
-    const { app } = await createApp({ config, db, clubs, chain, keyStore, mailer: outbox });
+    const flakyChain: Chain = {
+      ...chain,
+      async createAccount(owner) {
+        const created = await chain.createAccount(owner);
+        if (breakNextCreation) {
+          breakNextCreation = false;
+          throw new Error("simulated: the connection dropped after the Account was created");
+        }
+        return created;
+      },
+    };
+    const { app } = await createApp({ config, db, clubs, chain: flakyChain, keyStore, mailer: outbox });
     server = app.listen(port, "127.0.0.1");
     browser = new Browser(config.issuer);
-    clubClient = createWalletClient({
-      account: club,
-      transport: http(local.rpcUrl),
-      chain: defineChain({
-        id: local.chainId,
-        name: "Local",
-        nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
-        rpcUrls: { default: { http: [local.rpcUrl] } },
-      }),
+    localChain = defineChain({
+      id: local.chainId,
+      name: "Local",
+      nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
+      rpcUrls: { default: { http: [local.rpcUrl] } },
     });
+    clubClient = createWalletClient({ account: club, transport: http(local.rpcUrl), chain: localChain });
   });
 
   after(() => {
@@ -171,12 +196,12 @@ describe("a club signs a member in through the Passport and acts for them on Len
   // ------------------------------------------------------------------ What the club's server does
 
   /** Starts a sign-in the way a club's server does: a random state, nonce and PKCE secret, then a redirect. */
-  function signInRequest() {
+  function signInRequest(sendBackTo = redirectUri) {
     const verifier = base64url(randomBytes(32));
     const request = { verifier, state: base64url(randomBytes(16)), nonce: base64url(randomBytes(16)) };
     const query = new URLSearchParams({
       client_id: "queens-book-club",
-      redirect_uri: redirectUri,
+      redirect_uri: sendBackTo,
       response_type: "code",
       scope: "openid",
       state: request.state,
@@ -259,9 +284,9 @@ describe("a club signs a member in through the Passport and acts for them on Len
   let firstPost: bigint;
   const deleteFirstPost = () => encodeFunctionData({ abi: feedAbi, functionName: "deletePost", args: [firstPost, [], []] });
   const scopesWithDelete = () => [
-    { target: local.feed, selector: selectorOf(feedAbi, "createPost") },
+    { target: local.clubFeed, selector: selectorOf(feedAbi, "createPost") },
     { target: local.graph, selector: selectorOf(graphAbi, "follow") },
-    { target: local.feed, selector: selectorOf(feedAbi, "deletePost") },
+    { target: local.clubFeed, selector: selectorOf(feedAbi, "deletePost") },
   ];
   let firstRequest: ReturnType<typeof signInRequest>;
   let firstCallback: URL;
@@ -288,7 +313,7 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.match(consent.body, /127\.0\.0\.1:5001/, "the club's domain is shown");
     assert.match(consent.body, /Post as you/);
     assert.match(consent.body, /Follow people as you/);
-    assert.match(consent.body, /type="checkbox" name="optional" value="Delete any of your posts[^"]*">/, "what is optional starts unticked");
+    assert.match(consent.body, /type="checkbox" name="optional" value="Delete your posts in the club[^"]*">/, "what is optional starts unticked");
 
     // Tapping Allow records the grant onchain and sends the member back to the club with a one-time code.
     const allowed = await browser.postForm(`/interaction/${uidOf(consent.body)}/allow`);
@@ -313,7 +338,7 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.equal(
       scopeId,
       hashScopes([
-        { target: local.feed, selector: selectorOf(feedAbi, "createPost") },
+        { target: local.clubFeed, selector: selectorOf(feedAbi, "createPost") },
         { target: local.graph, selector: selectorOf(graphAbi, "follow") },
       ]),
     );
@@ -323,7 +348,7 @@ describe("a club signs a member in through the Passport and acts for them on Len
   });
 
   test("the club posts to Lens as the member, with its own key and no prompt", async () => {
-    const receipt = await clubExecutes(local.feed, post("lens://e2e/first-review"));
+    const receipt = await clubExecutes(local.clubFeed, post("lens://e2e/first-review"));
     assert.equal(receipt.status, "success");
     const [created] = parseEventLogs({ abi: feedAbi, eventName: "Lens_Feed_PostCreated", logs: receipt.logs });
     assert.ok(created, "the feed recorded a post");
@@ -333,8 +358,9 @@ describe("a club signs a member in through the Passport and acts for them on Len
 
   test("the club cannot do anything outside its grant", async () => {
     // The member left "delete" unticked, so it is not in the grant.
-    await assert.rejects(clubExecutes(local.feed, deleteFirstPost()), /NotInScope/);
-    // The same function on a contract that is not in the grant.
+    await assert.rejects(clubExecutes(local.clubFeed, deleteFirstPost()), /NotInScope/);
+    // The same function on a contract that is not in the grant: the grant names the club's feed, not the shared one.
+    await assert.rejects(clubExecutes(local.feed, post("lens://e2e/shared-feed")), /NotInScope/);
     await assert.rejects(clubExecutes(local.graph, post("lens://e2e/elsewhere")), /NotInScope/);
     // Nor can anyone else use the club's grant.
     await assert.rejects(
@@ -343,10 +369,43 @@ describe("a club signs a member in through the Passport and acts for them on Len
         address: local.grantRegistry,
         abi: grantRegistryAbi,
         functionName: "execute",
-        args: [account, local.feed, post("lens://e2e/stranger")],
+        args: [account, local.clubFeed, post("lens://e2e/stranger")],
       }),
       /GrantNotActive/,
     );
+  });
+
+  test("an Account created without the Passport hearing back is found again, not made twice", async (t) => {
+    const logged = t.mock.method(console, "error", () => {});
+    const other = new Browser(config.issuer);
+    const otherEmail = `noor-${Date.now()}@example.com`;
+    const signIn = async () => {
+      await other.postForm("/login/email", { email: otherEmail, return: "/account" });
+      return other.postForm("/login/code", { code: outbox.codes.get(otherEmail) as string, return: "/account" });
+    };
+
+    breakNextCreation = true;
+    assert.equal((await signIn()).status, 500);
+    assert.match(String(logged.mock.calls[0]?.arguments[0]), /simulated/);
+    const pending = db.prepare("SELECT user_id AS id, owner FROM provisioning WHERE email = ?").get(otherEmail) as { id: string; owner: Address };
+    const created = await chain.accountCreatedFor(pending.owner);
+    assert.ok(created, "the Account exists on the chain");
+    assert.ok(db.prepare("SELECT 1 FROM keys WHERE user_id = ?").get(pending.id), "and the key that owns it was kept");
+
+    // Straight away, another attempt is told to wait: the first may still be running.
+    assert.equal((await signIn()).status, 409);
+
+    // Once the first is clearly over, signing in picks the same Account up.
+    db.prepare("UPDATE provisioning SET started_at = started_at - 600 WHERE email = ?").run(otherEmail);
+    assert.match((await signIn()).body, new RegExp(created, "i"));
+    const creations = await chain.publicClient.getContractEvents({
+      address: local.accountFactory,
+      abi: lensAbi,
+      eventName: "Lens_Account_Created",
+      args: { owner: pending.owner },
+      fromBlock: "earliest",
+    });
+    assert.equal(creations.length, 1, "one Account, not two");
   });
 
   test("signing in again asks the member for nothing", async () => {
@@ -375,28 +434,48 @@ describe("a club signs a member in through the Passport and acts for them on Len
     const page = await browser.get("/account");
     assert.match(page.body, /Queens Book Club/);
 
-    const after = await browser.postForm("/account/revoke", { client: "queens-book-club" });
+    const after = await browser.postForm("/account/revoke", { grantee: club.address });
     assert.doesNotMatch(after.body, /Queens Book Club/);
     assert.equal((await grantOf())[1], 0n);
-    await assert.rejects(clubExecutes(local.feed, post("lens://e2e/after-revoke")), /GrantNotActive/);
+    await assert.rejects(clubExecutes(local.clubFeed, post("lens://e2e/after-revoke")), /GrantNotActive/);
   });
 
   test("connecting again with the optional box ticked lets the club delete, and the account page says so", async () => {
+    // The domain shown is the one this request sends the member back to, not just the first one registered.
+    assert.match((await browser.get(signInRequest(otherRedirectUri).url)).body, /<h1>localhost:5002<\/h1>/);
+
     const request = signInRequest();
     const consent = await browser.get(request.url);
+    assert.match(consent.body, /<h1>127\.0\.0\.1:5001<\/h1>/);
     assert.match(consent.body, /Only if you tick it/);
-    // Something the club never listed is ignored, however it is sent.
     const allowed = await browser.postForm(`/interaction/${uidOf(consent.body)}/allow`, { optional: DELETE_ANY });
     assert.ok(allowed.leftFor);
     assert.equal(await redeem(allowed.leftFor, request), account);
     assert.equal((await grantOf())[0], hashScopes(scopesWithDelete()));
-    assert.match((await browser.get("/account")).body, /Also allowed: Delete any of your posts/);
+    assert.match((await browser.get("/account")).body, /Also allowed: Delete your posts in the club&#39;s feed/);
 
-    const receipt = await clubExecutes(local.feed, deleteFirstPost());
+    const receipt = await clubExecutes(local.clubFeed, deleteFirstPost());
     assert.equal(receipt.status, "success");
+  });
+
+  test("turning app access off ends every grant and takes the registry off the Account, until an app is connected again", async () => {
+    const off = await browser.postForm("/account/disconnect-all");
+    assert.match(off.body, /App access is off/);
+    assert.equal((await grantOf())[1], 0n);
+    assert.equal(await chain.isRegistryManager(account), false);
+    await assert.rejects(clubExecutes(local.clubFeed, post("lens://e2e/while-off")), /GrantNotActive/);
+
+    // Connecting an app puts the registry back. The earlier grant, with its extra permission, does not come back.
+    const request = signInRequest();
+    const consent = await browser.get(request.url);
+    const allowed = await browser.postForm(`/interaction/${uidOf(consent.body)}/allow`);
+    assert.ok(allowed.leftFor);
+    assert.equal(await chain.isRegistryManager(account), true);
+    assert.equal((await clubExecutes(local.clubFeed, post("lens://e2e/back-on"))).status, "success");
+    await assert.rejects(clubExecutes(local.clubFeed, deleteFirstPost()), /NotInScope/);
 
     // Disconnect again, so that the next steps start without a grant.
-    await browser.postForm("/account/revoke", { client: "queens-book-club" });
+    await browser.postForm("/account/revoke", { grantee: club.address });
     assert.equal((await grantOf())[1], 0n);
   });
 
@@ -405,7 +484,9 @@ describe("a club signs a member in through the Passport and acts for them on Len
     const { message } = await browser.getJson<{ message: string }>("/passkey/challenge");
     return browser.postJson("/account/handover", { address: key.address, signature: await key.signMessage({ message }) });
   }
-  const keysHeld = () => (db.prepare("SELECT COUNT(*) AS count FROM keys").get() as { count: number }).count;
+  /** How many keys the Passport holds for this member: one until the handover is done, then none. */
+  const keysHeld = () =>
+    (db.prepare("SELECT COUNT(*) AS count FROM keys WHERE user_id = (SELECT id FROM users WHERE email = ?)").get(email) as { count: number }).count;
 
   test("a handover that stops half-way can only be finished with the same passkey", async (t) => {
     // The failure below is made on purpose. The server logs it, as it should; keep that out of the test's output.
@@ -437,8 +518,9 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.ok(isAddressEqual(await chain.ownerOf(account), passkeyKey.address));
     assert.ok(isAddressEqual(await chain.ownerOf(await chain.proxyAdminOf(account)), passkeyKey.address));
 
-    // The Passport reads the chain the next time it sees the member, and records what happened.
-    assert.match((await browser.get("/account")).body, /Your passkey controls this account/);
+    // The Passport reads the chain the next time it sees the member, and records what happened. The session that
+    // an email code opened ends with it: from here on, only the new key signs in.
+    assert.match((await browser.get("/account")).body, /Email me a code/);
     assert.equal(keysHeld(), 0, "the Passport holds no key for this member any more");
   });
 
@@ -496,7 +578,69 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.equal(await redeem(back.leftFor, request), account, "the same Account as before the handover");
     assert.equal((await grantOf())[0], hashScopes(scopesWithDelete()));
 
-    const receipt = await clubExecutes(local.feed, post("lens://e2e/second-review"));
+    const receipt = await clubExecutes(local.clubFeed, post("lens://e2e/second-review"));
     assert.equal(receipt.status, "success");
+  });
+
+  type FromServer = { domain: never; types: never; primaryType: never; message: Record<string, string> };
+  /** Signs what the Passport hands the member's browser, the way the passkey page does. */
+  async function signFromServer(typedData: FromServer) {
+    const { nonce, deadline } = typedData.message;
+    const message = { ...typedData.message, nonce: BigInt(nonce as string), deadline: BigInt(deadline as string) };
+    return { nonce, deadline, signature: await passkeyKey.signTypedData({ ...typedData, message } as never) };
+  }
+
+  test("the account page lists every key that can act, and the member's key ends one of them or all", async () => {
+    // A grant the Passport had no part in: the member's key signs one for a key that no app is registered with.
+    const unknown = privateKeyToAccount(generatePrivateKey());
+    const time = await chain.currentTime();
+    const grant = {
+      account,
+      grantee: unknown.address,
+      scopes: [{ target: local.graph, selector: selectorOf(graphAbi, "follow") }],
+      expiry: time + 86400n,
+      nonce: 77n,
+      deadline: time + 600n,
+    };
+    const signature = await passkeyKey.signTypedData(grantTypedData(local.chainId, local.grantRegistry, grant));
+    await chain.submitGrant({ ...grant, signature });
+
+    const page = (await browser.get("/account")).body;
+    assert.match(page, /Queens Book Club/);
+    assert.match(page, /An app this Passport does not know/);
+    assert.match(page, new RegExp(unknown.address, "i"));
+
+    // It is removed by its address, registered or not.
+    const revoke = await browser.getJson<FromServer>(`/account/revoke-request?grantee=${unknown.address}`);
+    const removed = await browser.postJson("/account/revoke", { grantee: unknown.address, ...(await signFromServer(revoke)) });
+    assert.equal(removed.status, 200);
+    assert.doesNotMatch((await browser.get("/account")).body, /does not know/);
+
+    // And everything at once.
+    const revokeAll = await browser.getJson<FromServer>("/account/revoke-all-request");
+    const ended = await browser.postJson("/account/disconnect-all", await signFromServer(revokeAll));
+    assert.equal(ended.status, 200);
+    assert.equal((await grantOf())[1], 0n);
+    await assert.rejects(clubExecutes(local.clubFeed, post("lens://e2e/after-everything")), /GrantNotActive/);
+  });
+
+  test("when the Account changes hands outside the Passport, the old owner's session ends", async () => {
+    // The member's key sends the Account to someone else directly, with no Passport involved.
+    await chain.publicClient.waitForTransactionReceipt({
+      hash: await clubClient.sendTransaction({ account: club, chain: localChain, to: passkeyKey.address, value: parseEther("1") }),
+    });
+    const ownerClient = createWalletClient({ account: passkeyKey, transport: http(local.rpcUrl), chain: localChain });
+    const newOwner = privateKeyToAccount(generatePrivateKey()).address;
+    await chain.publicClient.waitForTransactionReceipt({
+      hash: await ownerClient.sendTransaction({
+        account: passkeyKey,
+        chain: localChain,
+        to: account,
+        data: encodeFunctionData({ abi: lensAbi, functionName: "transferOwnership", args: [newOwner] }),
+      }),
+    });
+
+    assert.match((await browser.get("/account")).body, /Email me a code/, "the Passport's own pages ask who is there");
+    assert.equal((await browser.get(signInRequest().url)).leftFor, undefined, "and clubs are no longer told this browser is that member");
   });
 });

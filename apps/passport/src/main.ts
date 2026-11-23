@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { createApp } from "./app.ts";
 import { ConsoleMailer } from "./auth.ts";
 import { createChain } from "./chain.ts";
-import { loadClubs } from "./clubs.ts";
+import { loadClubs, policySettings } from "./clubs.ts";
 import { loadConfig } from "./config.ts";
 import { openDb, purgeExpired } from "./db.ts";
 import { LocalKeyStore } from "./keystore.ts";
@@ -18,7 +18,7 @@ const { app } = await createApp({
   db,
   clubs,
   chain,
-  keyStore: new LocalKeyStore(db, chain, config.keyStoreSecret, config),
+  keyStore: new LocalKeyStore(db, chain, config.keyStoreSecret, policySettings(config.chainId, config.grantRegistry, clubs)),
   mailer: new ConsoleMailer(),
 });
 

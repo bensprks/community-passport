@@ -94,7 +94,14 @@ export function passkeyRequiredPage(returnTo: string): string {
  * `current` is the grant this club already holds, if any: when it is being renewed, what the member accepted
  * last time is ticked again.
  */
-export function consentPage(uid: string, club: Club, user: User, current: { live: boolean; accepted: readonly string[] }): string {
+export function consentPage(
+  uid: string,
+  club: Club,
+  /** Where this request sends the member back to. A club's name is only what it calls itself. */
+  domain: string,
+  user: User,
+  current: { live: boolean; accepted: readonly string[] },
+): string {
   const selfCustody = user.custody === "self";
   const base = `/interaction/${escapeHtml(uid)}`;
   const items = (labels: string[], kind: string) => labels.map((label) => `<li class="${kind}">${escapeHtml(label)}</li>`).join("\n  ");
@@ -108,7 +115,7 @@ export function consentPage(uid: string, club: Club, user: User, current: { live
   return page(
     `Connect ${club.name}`,
     `<p class="muted">${escapeHtml(club.name)} ${current.live ? "wants to stay connected" : "wants to connect"}</p>
-<h1>${escapeHtml(clubDomain(club))}</h1>
+<h1>${escapeHtml(domain)}</h1>
 <form id="deny" method="post" action="${base}/deny"></form>
 <form method="post" action="${base}/allow">
 <p>It will be able to:</p>
@@ -118,7 +125,7 @@ export function consentPage(uid: string, club: Club, user: User, current: { live
 ${choices.length ? `<p>Only if you tick it:</p>\n<ul>\n  ${choices.join("\n  ")}\n</ul>` : ""}
 <p>It will never be able to:</p>
 <ul>
-  ${items(["Move money", "Take or change your account"], "no")}
+  ${items(["Send MON from your account", "Take or change your account"], "no")}
 </ul>
 <p class="muted">For ${club.grantDays} days, renewed when you sign in. You can disconnect it at any time.</p>
 <div class="row">
@@ -131,25 +138,44 @@ ${choices.length ? `<p>Only if you tick it:</p>\n<ul>\n  ${choices.join("\n  ")}
   );
 }
 
-/** An app a member has connected, with the optional things they accepted. */
-export type ConnectedApp = { club: Club; accepted: readonly string[]; expiry: Date };
+/** A key that can act for a member, as the registry has it. */
+export type ConnectedApp = {
+  grantee: string;
+  /** The registered app that key belongs to, if any. */
+  club: Club | undefined;
+  /** Whether the grant is for what that app asks for today. */
+  asRegistered: boolean;
+  /** The optional things the member accepted. */
+  accepted: readonly string[];
+  expiry: Date;
+};
 
-export function accountPage(user: User, connections: ConnectedApp[], message?: string): string {
+export function accountPage(user: User, connections: ConnectedApp[], registryOn: boolean, message?: string): string {
   const selfCustody = user.custody === "self";
-  const rows = connections.map(({ club, accepted, expiry }) => {
-    const also = accepted.length ? `<br><span class="muted">Also allowed: ${escapeHtml(accepted.join("; "))}</span>` : "";
+  const rows = connections.map(({ grantee, club, asRegistered, accepted, expiry }) => {
     const remove = selfCustody
-      ? `<button type="button" class="link" data-passkey="revoke" data-client="${escapeHtml(club.clientId)}">Remove</button>`
-      : `<form method="post" action="/account/revoke"><input type="hidden" name="client" value="${escapeHtml(club.clientId)}"><button class="link">Remove</button></form>`;
-    return `<li><span>${escapeHtml(club.name)}<br><span class="muted">${escapeHtml(clubDomain(club))} · until ${expiry.toISOString().slice(0, 10)}</span>${also}</span>${remove}</li>`;
+      ? `<button type="button" class="link" data-passkey="revoke" data-grantee="${escapeHtml(grantee)}">Remove</button>`
+      : `<form method="post" action="/account/revoke"><input type="hidden" name="grantee" value="${escapeHtml(grantee)}"><button class="link">Remove</button></form>`;
+    const name = club ? escapeHtml(club.name) : "An app this Passport does not know";
+    const where = club ? escapeHtml(clubDomain(club)) : `<code>${escapeHtml(grantee)}</code>`;
+    const notes = [
+      ...(club && !asRegistered ? ["It holds permissions it no longer asks for."] : []),
+      ...(accepted.length ? [`Also allowed: ${accepted.join("; ")}`] : []),
+    ].map((note) => `<br><span class="muted">${escapeHtml(note)}</span>`);
+    return `<li><span>${name}<br><span class="muted">${where} · until ${expiry.toISOString().slice(0, 10)}</span>${notes.join("")}</span>${remove}</li>`;
   });
+  const none = registryOn ? "None yet." : "App access is off. Connecting an app turns it back on.";
+  const turnOff = selfCustody
+    ? `<button type="button" data-passkey="revokeAll">Disconnect everything</button>`
+    : `<form method="post" action="/account/disconnect-all"><button>Turn off app access</button></form>`;
   return page(
     "Your account",
     `<h1>Your account</h1>
 <p class="muted">${escapeHtml(user.email)}<br><code>${escapeHtml(user.account)}</code></p>
 ${error(message)}
 <p>Connected apps</p>
-<ul>${rows.join("\n") || '<li><span class="muted">None yet.</span></li>'}</ul>
+<ul>${rows.join("\n") || `<li><span class="muted">${none}</span></li>`}</ul>
+${rows.length || (registryOn && !selfCustody) ? turnOff : ""}
 <p class="error" data-passkey-error hidden></p>
 ${
   selfCustody
