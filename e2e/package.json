@@ -1,0 +1,20 @@
+{
+  "name": "@community-passport/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The whole flow against a local chain: a club signs a member in, gets a grant, and posts to Lens.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-reporter=spec --test-concurrency=1 '*.test.ts'"
+  },
+  "dependencies": {
+    "@community-passport/grants": "workspace:*",
+    "@community-passport/passport": "workspace:*",
+    "viem": "2.58.4"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  }
+}
