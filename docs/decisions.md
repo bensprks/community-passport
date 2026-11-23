@@ -27,7 +27,7 @@
 
 **Keys**
 
-4. **Which key vendor?** It must hold keys in a sealed server, pin signing to the registry and a list of contracts, and check the member's sign-in itself before a handover. Not yet tested against any vendor.
+4. **Which key vendor?** It must hold keys in a sealed server, enforce the signing rule, and see the member's approval for itself: the acceptance test in [Passport](passport.md). Not yet tested against any vendor.
 5. **Is recovery after a handover needed from the start?** Today a lost passkey, with no synced copy, is a lost Account. A recovery address would fix it and adds a little contract work on the Lens side.
 
 **Product**
@@ -45,4 +45,7 @@
 
 **Contract**
 
-13. **Add "disconnect everything" to the registry?** One call that ends every grant on an Account. It would make a handover a clean start and close a gap: today grants come back if a member removes the registry and later adds it again. About 30 lines. Recommended, and best done before an audit.
+13. **Upgradeable, or fixed versions that members opt into?** Today the registry is upgradeable behind a delay, and a member can leave in one tap. The alternative is a registry that can never change, with each new version a separate contract that members choose to add. That removes the upgrade risk and makes every fix a migration. Fixed versions suit a first, narrow permission well.
+14. **Checking arguments.** The registry checks the contract and the function only. Likes and votes go through one Lens contract that takes the real action as an argument, so granting them needs the registry to check that argument. Not built.
+15. **Retiring an app's key.** Only a member, or the key itself, can end that key's grants. When a club replaces its developer, who ends the old key's grants for every member: the guardian, the operator, or each member?
+16. **A way out that does not depend on the Passport's domain.** A passkey's key is derived on the Passport's page. Offer a handover to a wallet the member controls elsewhere, and a recovery path that works if the domain is gone.
