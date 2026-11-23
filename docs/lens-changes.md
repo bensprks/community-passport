@@ -21,7 +21,7 @@ The registry is a separate contract. It needs no permission from Lens, and nothi
 
 **The draft:** [monad-developers/lens-monad-protocol#20](https://github.com/monad-developers/lens-monad-protocol/pull/20). 65 lines in `Account.sol`, 19 tests. The signature names the chain and the Account, works once, and has a deadline. Every existing check on managers and permissions applies unchanged. One mapping is appended to the Account's storage.
 
-**With it,** an existing member's path into the Passport is: connect their wallet on the Passport's page, sign one message that adds the registry, and from then on approve apps with signatures. They keep their key throughout. The Passport never holds it.
+**With it,** an existing member's path into the Passport would be: connect their wallet on the Passport's page, sign one message that adds the registry, and from then on approve apps with signatures. They keep their key throughout. The Passport never holds it. (Signing in to the Passport with a wallet is not built in this version. With a passkey-derived key it is.)
 
 **Without it,** the same path works today for any owner who has a little MON: one transaction from their wallet.
 

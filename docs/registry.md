@@ -12,20 +12,13 @@ The registry is the missing piece. An Account adds the registry as its manager, 
 
 ```mermaid
 flowchart LR
-    club[Club's key] -- "execute(account, target, data)" --> registry
-    subgraph registry [Grant registry]
-        direction TB
-        c1{Does the caller hold a grant on this Account?}
-        c2{Has it expired?}
-        c3{Is target + function in the grant?}
-        c1 -- yes --> c2
-        c2 -- no --> c3
+    club[Club's key] -- "execute(account, target, data)" --> c1
+    subgraph registry [Grant registry: all three must hold, or the call fails]
+        direction LR
+        c1[The caller holds a grant on this Account] --> c2[The grant has not expired] --> c3[The target and function are in the grant]
     end
-    c3 -- yes --> account[Lens Account]
+    c3 --> account[Lens Account]
     account -- "the call, with no MON attached" --> target[Lens feed, graph]
-    c1 -- no --> x[Revert]
-    c2 -- yes --> x
-    c3 -- no --> x
 ```
 
 ## What it stores
