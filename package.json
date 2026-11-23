@@ -3,8 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "One sign-in and one Lens Account across community apps, with scoped, expiring grants per app.",
-  "packageManager": "pnpm@10.19.0",
-  "engines": { "node": ">=22" },
+  "packageManager": "pnpm@12.21.0",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
@@ -12,5 +11,12 @@
     "test:contracts": "cd contracts && forge test",
     "chain": "bash scripts/dev-chain.sh",
     "e2e": "pnpm --filter @community-passport/e2e test"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "26.13.1",
+      "onFail": "download"
+    }
   }
 }
