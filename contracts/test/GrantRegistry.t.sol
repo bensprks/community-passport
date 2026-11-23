@@ -231,6 +231,20 @@ contract GrantRegistryTest is RegistryTestBase {
         assertTrue(registry.isAllowed(address(account), club, address(target), MockTarget.ping.selector));
     }
 
+    // An EIP-7702 account has code at its address while its key still signs. Its code need not answer ERC-1271.
+    function test_GrantWithSig_OwnerIsAKeyWithCodeAtItsAddress() public {
+        vm.etch(owner, address(target).code);
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory signature = _signGrant(OWNER_KEY, address(account), club, scopes, expiry, 7, deadline);
+        registry.grantWithSig(address(account), club, scopeId, expiry, 7, deadline, signature);
+        assertTrue(registry.isAllowed(address(account), club, address(target), MockTarget.ping.selector));
+
+        // Someone else's signature is still refused.
+        signature = _signGrant(0xBAD, address(account), stranger, scopes, expiry, 8, deadline);
+        vm.expectRevert(IGrantRegistry.InvalidSignature.selector);
+        registry.grantWithSig(address(account), stranger, scopeId, expiry, 8, deadline, signature);
+    }
+
     // Acting
 
     function test_Execute_ForwardsTheCallAsTheAccountWithNoValue() public {

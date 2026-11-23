@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {IGrantRegistry, Scope} from "./IGrantRegistry.sol";
 
@@ -251,9 +252,15 @@ contract GrantRegistry is IGrantRegistry, Initializable {
         require(!$.nonceUsed[account][nonce], NonceUsed());
         $.nonceUsed[account][nonce] = true;
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
-        require(
-            SignatureChecker.isValidSignatureNow(ILensAccount(account).owner(), digest, signature), InvalidSignature()
-        );
+        require(_isSignedBy(ILensAccount(account).owner(), digest, signature), InvalidSignature());
+    }
+
+    /// @dev A plain key's signature first, also when the owner's address has code (an EIP-7702 account whose key
+    /// still signs). Otherwise the owner is asked as a contract wallet (ERC-1271).
+    function _isSignedBy(address signer, bytes32 digest, bytes calldata signature) internal view returns (bool) {
+        (address recovered, ECDSA.RecoverError recoverError,) = ECDSA.tryRecoverCalldata(digest, signature);
+        return (recoverError == ECDSA.RecoverError.NoError && recovered == signer)
+            || SignatureChecker.isValidERC1271SignatureNowCalldata(signer, digest, signature);
     }
 
     function _setGuardian(address newGuardian) internal {
