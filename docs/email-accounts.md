@@ -50,35 +50,44 @@ Signing in is unchanged, because a session moves nothing onchain. The reply is n
 
 The Passport creates the contracts, relays and pays gas. It cannot add a device, because it cannot forge an email.
 
-## What is a stand-in
+## The email proof
 
-The email proof sits behind one interface, [`IEmailProofVerifier`](../contracts/src/email/IEmailProofVerifier.sol). This version ships a development stand-in, [`AttestedEmailVerifier`](../contracts/src/email/AttestedEmailVerifier.sol), which takes one key's word that it saw the email. In the demo, opening a link printed in the terminal stands in for the reply.
+The proof sits behind one interface, [`IEmailProofVerifier`](../contracts/src/email/IEmailProofVerifier.sol), with two implementations.
 
-With the stand-in, whoever holds that key can add a device to any member, so it is a custodian by another name. The design only delivers what it promises once the real proof is in its place. That is the next piece of work:
+**The real one:** [`ZKEmailVerifier`](../contracts/src/email/ZKEmailVerifier.sol), built on [ZK Email](https://github.com/zkemail/email-tx-builder). The member's reply carries one line, "signHash" and a number. The proof shows that their mail provider signed an email from them with that line, without revealing the email. The contract then checks that:
 
-- [ZK Email](https://github.com/zkemail/email-tx-builder)'s verifier and its list of mail providers' signing keys, in place of the stand-in.
-- Receiving the member's reply, and a prover that turns it into the proof.
+- the number is the command being approved;
+- the sender is this member;
+- the mail provider's key is on the onchain list of providers' keys;
+- the email is less than a day old.
+
+It is tested with real proofs, of real replies sent from Gmail, which ZK Email publish with their own tests. A real proof adds a device through the owner contract, and that device's passkey then signs. Each published email approves a fixed number, and no passkey can be made to match it, so in that one test the owner contract is told that the number means "add this passkey". Nothing else is changed.
+
+**The stand-in:** [`AttestedEmailVerifier`](../contracts/src/email/AttestedEmailVerifier.sol), which takes one key's word that it saw the email. The Passport and the demo still run on this one, and a link printed in the terminal stands in for the reply. With it, whoever holds that key can add a device to any member, so it is a custodian by another name.
+
+What is left before the Passport can run on the real one:
+
+- Receiving the member's reply.
+- A prover that turns the reply into the proof. Not run here, so how long it takes is not measured.
+- The list of mail providers' keys on Monad, and someone to keep it current.
 
 The passkey page has not been tried with a real passkey. The tests play the passkey with a key that signs exactly what a browser's passkey returns.
 
 ## Measured
 
-On a local chain with Monad's gas pricing. MON amounts assume 100 gwei per gas.
+With Monad's gas pricing. MON amounts assume 100 gwei per gas.
 
 | Step | Gas | About |
 | --- | --- | --- |
 | Create the owner contract | 0.14M | 0.014 MON |
 | Create the Account | 1.37M, as before | 0.14 MON |
-| Add a device, with the stand-in | 0.18M | 0.018 MON |
-| Check one ZK Email proof | 1.98M (0.44M with Ethereum's pricing) | 0.2 MON |
+| Add a device with a real email proof | 2.7M | 0.27 MON |
 | Connect an app, signed by a passkey | 0.27M (0.23M with a key) | 0.027 MON |
 | Disconnect an app, signed by a passkey | 0.21M (0.16M with a key) | 0.021 MON |
 
-The proof check was measured by deploying ZK Email's verifier contract and calling it with a well-formed proof that does not verify. The cost does not depend on whether it verifies.
+Adding a device breaks down as 1.95M for checking the proof, 0.5M for ZK Email's contract to lay out what the proof is about, and 0.2M for the rest. The same proof check costs 0.44M with Ethereum's pricing: Monad prices the curve operations it uses at five times.
 
-A new member with one device and one app would cost about 4M gas, 0.4 MON, against 0.16 MON with a key vendor. Half of that is the one proof.
-
-Not measured: how long a proof takes to make.
+A new member with one device and one app costs about 4.5M gas, 0.45 MON, against 0.16 MON with a key vendor.
 
 ## What it costs
 

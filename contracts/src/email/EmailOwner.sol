@@ -93,7 +93,7 @@ contract EmailOwner is Initializable {
 
     /// @notice What the member's email has to approve to add this passkey. It names this chain and this contract,
     /// so an email is good for one member's owner contract only.
-    function enrolCommand(bytes32 qx, bytes32 qy) public view returns (bytes32) {
+    function enrolCommand(bytes32 qx, bytes32 qy) public view virtual returns (bytes32) {
         return _typedDigest(keccak256(abi.encode(ENROL_TYPEHASH, qx, qy)));
     }
 

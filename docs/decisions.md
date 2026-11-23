@@ -30,7 +30,7 @@
 4. **Which key vendor?** It must hold keys in a sealed server, enforce the signing rule, and see the member's approval for itself: the acceptance test in [Passport](passport.md). Not yet tested against any vendor.
 5. **Is recovery after a handover needed from the start?** Today a lost passkey, with no synced copy, is a lost Account. A recovery address would fix it and adds a little contract work on the Lens side.
 
-6. **A key vendor, or accounts rooted in an email?** The second removes the vendor and its running cost, and adds a reply per device, a proof system to trust, and about 0.2 MON per device. See [Accounts rooted in an email](email-accounts.md).
+6. **A key vendor, or accounts rooted in an email?** The second removes the vendor and its running cost, and adds a reply per device, a proof system to trust, and about 0.27 MON per device. See [Accounts rooted in an email](email-accounts.md).
 
 **Product**
 
