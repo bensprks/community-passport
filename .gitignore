@@ -20,3 +20,4 @@ clubs.json
 # Noir build output, and the built page that makes a proof in a browser.
 circuits/email_proof/target/
 circuits/bench/dist/
+circuits/email_proof/Prover.toml
