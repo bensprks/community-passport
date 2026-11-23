@@ -39,6 +39,7 @@ flowchart LR
 | `grantWithSig(…, signature)` | Anyone, with the owner's signature | The same. This is what the Passport's relayer calls |
 | `revoke(account, grantee)` | The Account's owner, or the grantee itself | Ends a grant. A club whose key leaked can end its own grants |
 | `revokeWithSig(…, signature)` | Anyone, with the owner's signature | The same |
+| `revokeAll(account)`, `revokeAllWithSig(…)` | The Account's owner, or anyone with the owner's signature | Ends every grant on the Account at once, also to keys nobody remembers. Grants made afterwards work as usual |
 | `execute(account, target, data)` | A grantee | Checks the grant, then has the Account make the call |
 | `setPaused`, `setGuardian` | The guardian | Pause and resume. Hand the role on |
 
@@ -51,6 +52,7 @@ flowchart LR
 5. **`execute` never attaches MON to the call.**
 6. **A call with no function name is never allowed.** That rules out plain transfers.
 7. **Revoking always works**, including while paused.
+8. **Ending every grant is final.** Grants ended that way do not come back, even if the registry is taken off the Account and added again.
 
 ## What a grantee can never do, whatever the grant says
 
@@ -98,7 +100,9 @@ flowchart LR
 | A flaw in the registry | The guardian pauses. Members can still revoke, or remove the registry from their Account. An upgrade follows after the delay |
 | The admin key is stolen | The attacker must schedule in public and wait out the delay |
 | A grant outlives a member's interest | Expiry, a year at most. 90 days by default in the Passport |
-| An Account is sold or given away with grants on it | Grants stay with the Account, not the owner. The new owner should revoke them. They can see them from the registry's events |
+| An Account is sold or given away with grants on it | Grants stay with the Account, not the owner. The new owner ends them all with one call |
+| A member revokes while an approval they signed is still waiting to be submitted | A signed grant stays usable until its deadline, ten minutes in the Passport, so it could be submitted after the revoke. The member revokes again, or ends every grant |
+| The registry's logic is replaced with something harmful | The change is public for the length of the delay. A member takes the registry off their Account, which the Passport does for them in one tap |
 
 ## Tests
 
@@ -106,7 +110,7 @@ flowchart LR
 cd contracts && forge test
 ```
 
-51 tests. 40 cover the registry on its own, including every rule above and two fuzz tests ("only ever calls a function in the grant", "expiry is always within a year"). 7 run against the real Lens `Account`. 4 cover the deploy script and the upgrade delay.
+55 tests. 43 cover the registry on its own, including every rule above and two fuzz tests ("only ever calls a function in the grant", "expiry is always within a year"). 8 run against the real Lens `Account`. 4 cover the deploy script and the upgrade delay.
 
 Not done: an audit, and a formal check of the storage layout across upgrades (the storage sits at a fixed, namespaced location, and one test checks that an upgrade keeps grants and signatures working).
 

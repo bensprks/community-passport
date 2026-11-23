@@ -51,7 +51,15 @@ The Passport's own session lasts 30 days. A club's sign-in request is answered w
 
 It shows the club's domain, large. A club's name is whatever it claims to be, but its domain is where the member is actually sent back to. Under it, what the club is asking for in plain words, then what it can never do, then how long the grant lasts.
 
-Whether a member needs to see this screen is decided by the registry, not by a record the Passport keeps. The same goes for the list of connected apps on the member's account page: the Passport keeps no list of its own that could disagree with the chain. If the club's grant on the member's Account is live, and matches what the club asks for today, there is no screen. If the club's list of functions has changed, the grant no longer matches and the member is asked again.
+Whether a member needs to see this screen is decided by the registry, not by a record the Passport keeps. If the club's grant on the member's Account is live, and matches what the club asks for today, there is no screen. If the club's list of functions has changed, the grant no longer matches and the member is asked again.
+
+An app marks what it asks for as required or optional. Optional things are boxes that start unticked, and the grant covers only what the member ticked. Anything that reaches what the member did in other apps, such as deleting posts on a shared feed or changing who they follow, belongs there.
+
+## The member's account page
+
+It lists every key the registry says can act for the member, read from the registry's own events, not from the Passport's list of apps. An app that changed its key, changed what it asks for, or is no longer registered still shows, by its address, and can be removed.
+
+"Turn off app access" ends every grant and takes the registry off the member's Account, so nothing can act through it even if the registry's logic were replaced. Connecting an app turns it back on. A member who holds their own key ends every grant with one signature; taking the registry off takes a transaction from their wallet.
 
 ## How keys are held
 
@@ -59,16 +67,21 @@ Each member's Account is owned by one key. Until the member takes it over, the P
 
 | Request | Answer |
 | --- | --- |
-| Sign a grant or a revocation, for the grant registry, on this chain, for this member's own Account. A grant may only name functions on the Lens contracts the operator listed | Allow |
+| Sign a grant, for the grant registry, on this chain, for this member's own Account, to a registered app's key, for functions that app is registered for, for no longer than that app's grants last | Allow |
+| Sign the end of one grant, or of all of them | Allow |
+| Take the registry off this member's Account, or put it back with the right to pass calls on and no other | Allow |
 | Send "transfer ownership" to this member's Account or to its proxy admin, when the member signed in within the last ten minutes | Allow |
 | Anything else | Refuse |
 
-So the key cannot sign a transaction that posts, moves tokens, adds a manager or calls any other contract, cannot sign a grant that points at a token, and cannot sign a message for any other site.
+So the key cannot sign a transaction that posts, moves tokens, adds any other manager or calls any other contract. It cannot sign a grant to a key that is not a registered app's, or for a function that app is not registered for. It cannot sign a message for any other site.
 
 In production a key vendor holds the keys in a sealed server and enforces the rule there. [`keystore.ts`](../apps/passport/src/keystore.ts) is the interface a vendor adapter implements. The key store in this repository is for development: it runs inside the server, so whoever controls the server controls the keys. The vendor must be able to:
 
-- Pin signatures of structured messages to one contract address and chain, and check the contracts a grant names against a list.
-- Check for itself that the member signed in recently before it allows a handover, for example by verifying a token from the Passport's sign-in or its own email code. Without this, a compromised Passport server could hand Accounts to an attacker.
+- Enforce the table above: pin signing to the registry and the chain, and check each grant's key, functions and length against the list of registered apps.
+- **See the member's approval for itself.** The rule above cannot tell a member who tapped Allow from a server that says they did. The vendor has to check an approval that the Passport's server cannot produce by itself, for example a code the vendor sends to the member, bound to what is being approved: for a grant, the Account, the app's key, the functions, the expiry, the chain and the registry; for a handover, the exact new owner and both contracts that move. Proof that someone holds the new owner's key shows possession, not that the member chose it.
+- Refuse a change to the rule from the Passport's server alone.
+
+This is the acceptance test for a vendor. Until one passes it, a compromised Passport server can connect members to registered apps, or hand Accounts over, without them.
 
 ## Taking the key over
 
@@ -98,7 +111,9 @@ After that:
 | Key vendor adapter | Replaces the development key store. The choice of vendor is open: see [Decisions](decisions.md) |
 | Real email | Any transactional email service |
 | Limits per network address, and a cap on new Accounts per hour | Each new member costs the relayer about 0.14 MON, so sign-up needs protection from scripts |
-| A real database | The demo uses a local file |
+| A real database | The demo uses a local file. Creating an Account and handing one over are already written so that two servers cannot do the same one at once |
+| An indexer | The account page finds a member's grants in the registry's events. A node will not scan its whole history on request |
+| A way to retire an app's key | Today only a member, or the key itself, can end that key's grants. Replacing a club's developer needs a way to end them all |
 | Self-service for clubs | Today the operator edits a file. Someone has to review each club's list of functions and write its plain-language labels |
 | Recovery after a handover | For example a recovery address set while the member still has the passkey |
 | Sign-in with a wallet | For members who already hold a key. The server side is the same as for a passkey |
