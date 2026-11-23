@@ -2,6 +2,7 @@
   "name": "@community-passport/demo-club",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "A pretend club's app, to show the Passport from the outside: sign in, then post to Lens as the member.",
   "type": "module",
   "scripts": {

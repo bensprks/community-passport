@@ -2,6 +2,7 @@
   "name": "@community-passport/passport",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "The Passport: sign-in by redirect, consent, grants and the passkey handover.",
   "type": "module",
   "exports": {

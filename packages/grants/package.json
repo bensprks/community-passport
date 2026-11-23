@@ -2,6 +2,7 @@
   "name": "@community-passport/grants",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Build, sign and check grants for the Community Passport grant registry.",
   "type": "module",
   "exports": {

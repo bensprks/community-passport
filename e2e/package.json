@@ -2,6 +2,7 @@
   "name": "@community-passport/e2e",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "The whole flow against a local chain: a club signs a member in, gets a grant, and posts to Lens.",
   "type": "module",
   "scripts": {
