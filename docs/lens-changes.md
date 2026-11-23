@@ -1,6 +1,6 @@
 # Changes to Lens
 
-Short version: **none are needed** for accounts the Passport creates. **One small change** lets existing accounts join without their owner paying gas. It is open as a draft.
+**None are needed** for accounts the Passport creates. **One small change** lets existing accounts join without their owner paying gas.
 
 ## What the design uses from Lens as it is
 
@@ -21,13 +21,13 @@ The registry is a separate contract. It needs no permission from Lens, and nothi
 
 **The draft:** [monad-developers/lens-monad-protocol#20](https://github.com/monad-developers/lens-monad-protocol/pull/20). 65 lines in `Account.sol`, 19 tests. The signature names the chain and the Account, works once, and has a deadline. Every existing check on managers and permissions applies unchanged. One mapping is appended to the Account's storage.
 
-**With it,** an existing member's path into the Passport would be: connect their wallet on the Passport's page, sign one message that adds the registry, and from then on approve apps with signatures. They keep their key throughout. The Passport never holds it. (Signing in to the Passport with a wallet is not built in this version. With a passkey-derived key it is.)
+**With it,** an existing member's path into the Passport would be: connect their wallet on the Passport's page, sign one message that adds the registry, and from then on approve apps with signatures. They keep their key throughout. The Passport never holds it.
 
 **Without it,** the same path works today for any owner who has a little MON: one transaction from their wallet.
 
 Nothing in this repository depends on the change.
 
-## Worth knowing: an Account has two owners
+## An Account has two owners
 
 Each Lens Account is a proxy. Besides the Account's owner there is a second contract, the Account's **proxy admin**, which can change the code the Account runs. It has its own owner: whoever owned the Account when it was created.
 
@@ -36,7 +36,7 @@ Each Lens Account is a proxy. Besides the Account's owner there is a second cont
 
 So a real handover is two transfers, and the Passport does both: the proxy admin first, then the Account ([`app.ts`](../apps/passport/src/app.ts), tested end to end). The same applies to any Lens Account that changes hands some other way.
 
-This is not something the draft changes. A possible later improvement is to make the two move together.
+The draft does not change this.
 
 ## Not needed
 

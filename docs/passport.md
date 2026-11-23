@@ -65,9 +65,7 @@ Each member's Account is owned by one key. Until the member takes it over, the P
 
 So the key cannot sign a transaction that posts, moves tokens, adds a manager or calls any other contract, cannot sign a grant that points at a token, and cannot sign a message for any other site.
 
-**In this version** the key store is a stand-in: keys are encrypted in the server's database, and the rule runs in the server. That is fine for a demo and wrong for production, because whoever controls the server controls the keys.
-
-**In production** a key vendor holds the keys in a sealed server and enforces the rule there. The same interface ([`keystore.ts`](../apps/passport/src/keystore.ts)) is what a vendor adapter would implement. Two things the vendor must be able to do, which we believe the main ones can but have not built against:
+In production a key vendor holds the keys in a sealed server and enforces the rule there. [`keystore.ts`](../apps/passport/src/keystore.ts) is the interface a vendor adapter implements. The key store in this repository is for development: it runs inside the server, so whoever controls the server controls the keys. The vendor must be able to:
 
 - Pin signatures of structured messages to one contract address and chain, and check the contracts a grant names against a list.
 - Check for itself that the member signed in recently before it allows a handover, for example by verifying a token from the Passport's sign-in or its own email code. Without this, a compromised Passport server could hand Accounts to an attacker.
@@ -76,7 +74,9 @@ So the key cannot sign a transaction that posts, moves tokens, adds a manager or
 
 On the account page a member can choose "Secure it with a passkey".
 
-1. The browser creates a passkey for the Passport's domain and derives a key from it (using Category Labs' Mera library). That key exists only in the page's memory, for as long as a signature takes.
+The browser side is built on [Mera](https://github.com/category-labs/mera), Category Labs' library for accounts that come from a passkey. Mera creates the passkey and derives a key from a secret only that passkey can produce. It runs in the page, with nothing to install, and a passkey that syncs gives the same key on each of the member's devices. The Passport adds what goes around it: checking that the browser holds the key, moving the Account to it, and relaying what it signs.
+
+1. The browser creates a passkey for the Passport's domain and derives a key from it. That key exists only in the page's memory, for as long as a signature takes.
 2. The browser proves it holds the key by signing a one-time challenge.
 3. The Passport transfers the Account's **proxy admin** to the new key, then the **Account** itself. A Lens Account has both: see [Changes to Lens](lens-changes.md).
 4. The Passport deletes its copy of the old key and ends the member's sessions on other devices.
@@ -91,18 +91,16 @@ After that:
 - Their grants and their Account address are unchanged, so every club still sees the same member.
 - If they lose the passkey, and it was not synced, the Account cannot be recovered.
 
-A member with a wallet could take the same path with a wallet signature in place of the passkey. The server side would be the same. It is not built.
-
 ## What production still needs
 
 | Gap | Note |
 | --- | --- |
-| Key vendor adapter | Replaces the stand-in key store. The choice of vendor is open: see [Decisions](decisions.md) |
+| Key vendor adapter | Replaces the development key store. The choice of vendor is open: see [Decisions](decisions.md) |
 | Real email | Any transactional email service |
 | Limits per network address, and a cap on new Accounts per hour | Each new member costs the relayer about 0.14 MON, so sign-up needs protection from scripts |
 | A real database | The demo uses a local file |
 | Self-service for clubs | Today the operator edits a file. Someone has to review each club's list of functions and write its plain-language labels |
-| A check on a real phone | The passkey page has only been tested with a plain key standing in for the passkey |
 | Recovery after a handover | For example a recovery address set while the member still has the passkey |
+| Sign-in with a wallet | For members who already hold a key. The server side is the same as for a passkey |
 | Monitoring | The relayer's balance. Grants signed per hour, as an alarm on misuse |
 | A security review | Of the server, and an audit of the registry |

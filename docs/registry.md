@@ -69,8 +69,6 @@ And if a member removes the registry from their Account, every grant on that Acc
 - The Passport only registers clubs, and its key store only signs grants, whose functions are on a fixed list of Lens contracts (feeds, graphs and so on).
 - A member who signs with their own wallet sees every contract and function in the message.
 
-There is a second line of defence: the registry is a manager without Lens's token permission, so the Account applies its own checks to standard token transfers and approvals that come through it. Treat that as a backstop and not as the guarantee.
-
 ## Who controls it
 
 ```mermaid
@@ -86,7 +84,7 @@ flowchart LR
 - The guardian can pause and resume. It cannot upgrade, grant or act.
 - The registry does not need any permission from the Lens contracts or from whoever controls them. It is a separate contract that Accounts opt into.
 
-**Why upgradeable.** The contract is new and unaudited. If a flaw is found, the alternative to an upgrade is asking every member to remove one manager and add another. **What that costs.** Whoever holds the admin role could, after the delay, replace the logic with something that misuses every Account that has the registry as a manager. That is the main thing a member trusts MF with. The delay is there so that anyone watching can warn members to remove the registry first.
+**Why upgradeable.** The contract is new and unaudited. If a flaw is found, the alternative to an upgrade is asking every member to remove one manager and add another. **What that costs.** Whoever holds the admin role could, after the delay, replace the logic with something that misuses every Account that has the registry as a manager. That is the main thing a member trusts the registry's admin with. The delay is there so that anyone watching can warn members to remove the registry first.
 
 ## What can go wrong
 

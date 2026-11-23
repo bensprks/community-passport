@@ -2,8 +2,6 @@
 
 ## What it has to do
 
-These are the requirements as we understood them from MF's identity decision document and the conversations around it. Please correct any that are wrong.
-
 1. **One identity everywhere.** A member has the same Lens Account in every club's app, so their posts, follows and reputation are in one place.
 2. **Email first.** Signing up takes an email address and a code. No wallet, no seed phrase, no browser extension.
 3. **Works in native apps and on any club's domain.** Clubs run their own sites and their own iOS and Android apps.
@@ -14,7 +12,7 @@ These are the requirements as we understood them from MF's identity decision doc
 
 ## The design in one paragraph
 
-The Passport is a normal web sign-in service that MF runs. Every member has a Lens Account, owned by one key. To begin with the Passport holds that key for the member, in a key store that will sign only one kind of thing: a **grant**. A grant says which functions, on which contracts, one club's key may call as the member, and until when. Grants live in a contract, the **grant registry**, which each Account adds as a manager that can pass calls on and do nothing else. A club's server acts on Lens by calling the registry with its own key. The registry checks the grant and passes the call to the Account.
+The Passport is one sign-in service for the whole network: it serves every app built on Lens on Monad. Every member has a Lens Account, owned by one key. To begin with the Passport holds that key for the member, in a key store that will sign only one kind of thing: a **grant**. A grant says which functions, on which contracts, one club's key may call as the member, and until when. Grants live in a contract, the **grant registry**, which each Account adds as a manager that can pass calls on and do nothing else. A club's server acts on Lens by calling the registry with its own key. The registry checks the grant and passes the call to the Account.
 
 So the club never holds the member's key, the Passport is not needed for day-to-day actions, and what each app can do is written onchain where the member, the club and anyone else can read it.
 
@@ -24,9 +22,9 @@ So the club never holds the member's key, the Passport is not needed for day-to-
 flowchart LR
     subgraph member [Member]
         inbox[Email inbox]
-        passkey[Passkey, optional]
+        passkey["Passkey (Mera), optional"]
     end
-    subgraph passport [Passport, run by MF]
+    subgraph passport [Passport]
         keystore[Key store: one key per member. Signs grants only]
         relayer[Relayer key: pays gas. Owns nothing]
     end
@@ -60,7 +58,7 @@ A **relayer** is a key that submits other people's signed messages and pays the 
 
 **Disconnecting.** On the Passport's account page the member taps Disconnect. A signed revocation goes to the registry. The club's next call fails.
 
-**Taking the key over.** The member makes a passkey on the Passport's page. A key is derived from it in the browser, and the Account is transferred to that key. The Passport deletes its copy of the old key. From then on the member approves each new app with their fingerprint, the Passport can sign nothing for them, and an email code alone no longer signs them in.
+**Taking the key over.** The member makes a passkey on the Passport's page. [Mera](https://github.com/category-labs/mera), Category Labs' passkey account library, derives a key from it in the browser, with nothing to install, and the Account is transferred to that key. The Passport deletes its copy of the old key. From then on the member approves each new app with their fingerprint, the Passport can sign nothing for them, and an email code alone no longer signs them in.
 
 ## What each party is trusted with
 
@@ -75,7 +73,7 @@ A **relayer** is a key that submits other people's signed messages and pays the 
 
 ## Costs
 
-Measured on a local Monad chain with Monad's gas pricing. MON amounts assume 100 gwei per gas, roughly what our mainnet-like test network charged, and are rough.
+Measured on a local Monad chain with Monad's gas pricing. MON amounts assume 100 gwei per gas.
 
 | Action | Gas | About | Who pays |
 | --- | --- | --- | --- |
@@ -85,16 +83,16 @@ Measured on a local Monad chain with Monad's gas pricing. MON amounts assume 100
 | Hand an Account over | 0.18M over four transactions | 0.018 MON | Passport's relayer |
 | A post through the registry | 0.57M, of which about 0.08M is the registry | 0.057 MON | The club |
 
-A new member who connects one app costs about 0.16 MON. For 10,000 members that is roughly 1,600 MON, once. Who funds the relayer is MF's call.
+A new member who connects one app costs about 0.16 MON. For 10,000 members that is about 1,600 MON, once.
 
 Off chain, the running costs are a small server, a database, email (cents per thousand codes) and the key vendor (see [Decisions](decisions.md)).
 
-## Limits of this version
+## Limits
 
-- **The Passport is a custodian until a member takes their key.** The signing rule narrows what it can do to grants and handovers, but within that the member is trusting MF and the key vendor. The rule only protects members from a compromised Passport server if the key vendor enforces it and checks the member's sign-in itself. The development key store here does neither: it runs inside the server.
-- **Email is the root of trust** for members who have not taken their key. There is no second factor. A code is 8 digits and an address takes ten wrong guesses a day, which also means someone who knows a member's address can use up their guesses and keep them out for the day. Production needs limits per network address in front of this.
-- **Grants stay with the Account.** They survive a handover, and they come back if a member removes the registry from their Account and later adds it again. That is deliberate (clubs keep working when a member takes their key), but there is no "disconnect everything" in one step yet. See [Decisions](decisions.md).
-- **After a handover there is no recovery.** A member who loses their passkey, and has no synced copy, loses the Account. A recovery address would fix this and is not built.
+- **The Passport is a custodian until a member takes their key.** The signing rule narrows what it can do to grants and handovers, but within that the member is trusting the Passport's operator and the key vendor. The rule only protects members from a compromised Passport server if the key vendor enforces it and checks the member's sign-in itself.
+- **Email is the root of trust** for members who have not taken their key. There is no second factor. A code is 8 digits and an address takes ten wrong guesses a day, which also means someone who knows a member's address can use up their guesses and keep them out for the day.
+- **Grants stay with the Account.** They survive a handover, and they come back if a member removes the registry from their Account and later adds it again. That is deliberate (clubs keep working when a member takes their key), but there is no "disconnect everything" in one step. See [Decisions](decisions.md).
+- **After a handover there is no recovery.** A member who loses their passkey, and has no synced copy, loses the Account.
 - **Passkeys are tied to the Passport's domain for good.** If the domain changes, every passkey stops deriving its key. Choose the domain once.
 - **A grant names functions, not arguments.** "May call `createPost` on the global feed" cannot be narrowed to "only in this club's group". Lens's own rules on feeds and groups still apply.
 - **Grants do not limit how often** a club acts.
