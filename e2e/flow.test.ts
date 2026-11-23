@@ -54,6 +54,8 @@ const selectorOf = (abi: Abi, name: string) =>
   toFunctionSelector(abi.find((item) => item.type === "function" && item.name === name) as AbiFunction);
 
 const base64url = (bytes: Buffer) => bytes.toString("base64url");
+/** The one thing the test club asks for that a member may leave out. */
+const DELETE_ANY = "Delete any of your posts, including ones made in other apps";
 
 class Outbox implements Mailer {
   readonly codes = new Map<string, string>();
@@ -126,6 +128,7 @@ describe("a club signs a member in through the Passport and acts for them on Len
           permissions: [
             { label: "Post as you", target: local.feed, selector: selectorOf(feedAbi, "createPost") },
             { label: "Follow people as you", target: local.graph, selector: selectorOf(graphAbi, "follow") },
+            { label: DELETE_ANY, target: local.feed, selector: selectorOf(feedAbi, "deletePost"), optional: true },
           ],
         },
       ]),
@@ -253,6 +256,13 @@ describe("a club signs a member in through the Passport and acts for them on Len
 
   // ------------------------------------------------------------------ The story
 
+  let firstPost: bigint;
+  const deleteFirstPost = () => encodeFunctionData({ abi: feedAbi, functionName: "deletePost", args: [firstPost, [], []] });
+  const scopesWithDelete = () => [
+    { target: local.feed, selector: selectorOf(feedAbi, "createPost") },
+    { target: local.graph, selector: selectorOf(graphAbi, "follow") },
+    { target: local.feed, selector: selectorOf(feedAbi, "deletePost") },
+  ];
   let firstRequest: ReturnType<typeof signInRequest>;
   let firstCallback: URL;
 
@@ -278,6 +288,7 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.match(consent.body, /127\.0\.0\.1:5001/, "the club's domain is shown");
     assert.match(consent.body, /Post as you/);
     assert.match(consent.body, /Follow people as you/);
+    assert.match(consent.body, /type="checkbox" name="optional" value="Delete any of your posts[^"]*">/, "what is optional starts unticked");
 
     // Tapping Allow records the grant onchain and sends the member back to the club with a one-time code.
     const allowed = await browser.postForm(`/interaction/${uidOf(consent.body)}/allow`);
@@ -316,12 +327,13 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.equal(receipt.status, "success");
     const [created] = parseEventLogs({ abi: feedAbi, eventName: "Lens_Feed_PostCreated", logs: receipt.logs });
     assert.ok(created, "the feed recorded a post");
+    firstPost = (created.args as unknown as { postId: bigint }).postId;
     assert.ok(isAddressEqual((created.args as { author: Address }).author, account), "the member's Account is the author");
   });
 
   test("the club cannot do anything outside its grant", async () => {
-    const deletePost = encodeFunctionData({ abi: feedAbi, functionName: "deletePost", args: [1n, [], []] });
-    await assert.rejects(clubExecutes(local.feed, deletePost), /NotInScope/);
+    // The member left "delete" unticked, so it is not in the grant.
+    await assert.rejects(clubExecutes(local.feed, deleteFirstPost()), /NotInScope/);
     // The same function on a contract that is not in the grant.
     await assert.rejects(clubExecutes(local.graph, post("lens://e2e/elsewhere")), /NotInScope/);
     // Nor can anyone else use the club's grant.
@@ -367,6 +379,25 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.doesNotMatch(after.body, /Queens Book Club/);
     assert.equal((await grantOf())[1], 0n);
     await assert.rejects(clubExecutes(local.feed, post("lens://e2e/after-revoke")), /GrantNotActive/);
+  });
+
+  test("connecting again with the optional box ticked lets the club delete, and the account page says so", async () => {
+    const request = signInRequest();
+    const consent = await browser.get(request.url);
+    assert.match(consent.body, /Only if you tick it/);
+    // Something the club never listed is ignored, however it is sent.
+    const allowed = await browser.postForm(`/interaction/${uidOf(consent.body)}/allow`, { optional: DELETE_ANY });
+    assert.ok(allowed.leftFor);
+    assert.equal(await redeem(allowed.leftFor, request), account);
+    assert.equal((await grantOf())[0], hashScopes(scopesWithDelete()));
+    assert.match((await browser.get("/account")).body, /Also allowed: Delete any of your posts/);
+
+    const receipt = await clubExecutes(local.feed, deleteFirstPost());
+    assert.equal(receipt.status, "success");
+
+    // Disconnect again, so that the next steps start without a grant.
+    await browser.postForm("/account/revoke", { client: "queens-book-club" });
+    assert.equal((await grantOf())[1], 0n);
   });
 
   /** Asks the Passport to hand the Account to `key`, proving the browser holds it. */
@@ -448,18 +479,22 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.equal(unsigned.status, 400);
 
     type TypedData = { domain: never; types: never; primaryType: "Grant"; message: Record<string, string> };
-    const typedData = await browser.getJson<TypedData>(`/interaction/${uid}/grant-request`);
+    // The member ticks the optional box: their own key signs a grant that includes it, and nothing it was not shown.
+    const ticked = new URLSearchParams([["optional", DELETE_ANY], ["optional", "Move money"]]);
+    const typedData = await browser.getJson<TypedData & { message: { scopes: unknown[] } }>(`/interaction/${uid}/grant-request?${ticked}`);
+    assert.equal(typedData.message.scopes.length, 3);
     const { expiry, nonce, deadline } = typedData.message;
     const signature = await passkeyKey.signTypedData({
       ...typedData,
       message: { ...typedData.message, expiry: BigInt(expiry as string), nonce: BigInt(nonce as string), deadline: BigInt(deadline as string) },
     } as never);
-    const allowed = await browser.postJson<{ redirect: string }>(`/interaction/${uid}/allow`, { expiry, nonce, deadline, signature });
+    const allowed = await browser.postJson<{ redirect: string }>(`/interaction/${uid}/allow`, { optional: [DELETE_ANY], expiry, nonce, deadline, signature });
     assert.equal(allowed.status, 200);
 
     const back = await browser.get(new URL(allowed.body.redirect).pathname);
     assert.ok(back.leftFor);
     assert.equal(await redeem(back.leftFor, request), account, "the same Account as before the handover");
+    assert.equal((await grantOf())[0], hashScopes(scopesWithDelete()));
 
     const receipt = await clubExecutes(local.feed, post("lens://e2e/second-review"));
     assert.equal(receipt.status, "success");

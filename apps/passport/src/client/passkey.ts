@@ -83,10 +83,13 @@ const actions: Record<string, (button: HTMLElement) => Promise<string>> = {
   /** Approve an app: sign its grant with the passkey-derived key. */
   async grant(button) {
     const uid = button.dataset.uid;
-    const typedData = await (await fetch(`/interaction/${uid}/grant-request`)).json();
+    // The optional things the member ticked. The server builds the grant from these, and again when it is submitted.
+    const optional = [...document.querySelectorAll<HTMLInputElement>('input[name="optional"]:checked')].map((box) => box.value);
+    const query = new URLSearchParams(optional.map((label) => ["optional", label]));
+    const typedData = await (await fetch(`/interaction/${uid}/grant-request?${query}`)).json();
     const signature = await withExistingPasskey((account) => account.signTypedData(reviveTypedData(typedData)));
     const { expiry, nonce, deadline } = typedData.message;
-    return (await postJson(`/interaction/${uid}/allow`, { expiry: String(expiry), nonce: String(nonce), deadline: String(deadline), signature })).redirect;
+    return (await postJson(`/interaction/${uid}/allow`, { optional, expiry: String(expiry), nonce: String(nonce), deadline: String(deadline), signature })).redirect;
   },
 
   /** Disconnect an app: sign the revocation with the passkey-derived key. */

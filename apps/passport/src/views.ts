@@ -1,5 +1,5 @@
 import type { Club } from "./clubs.ts";
-import { clubDomain } from "./clubs.ts";
+import { clubDomain, optionalLabels, requiredLabels } from "./clubs.ts";
 import type { User } from "./db.ts";
 
 export function escapeHtml(value: string): string {
@@ -17,7 +17,9 @@ p, ul { margin: 0; } .muted { color: var(--muted); font-size: 14px; }
 ul { list-style: none; padding: 0; display: grid; gap: 8px; }
 li { border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; display: flex; gap: 10px; justify-content: space-between; align-items: center; }
 li.ok::before { content: "✓"; color: var(--ok); font-weight: 700; } li.no::before { content: "✕"; color: var(--no); font-weight: 700; }
-li.ok, li.no { justify-content: flex-start; }
+li.ok, li.no, li.choice { justify-content: flex-start; }
+li.choice label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+input[type="checkbox"] { width: 18px; height: 18px; padding: 0; margin: 3px 0 0; flex: none; accent-color: var(--ok); }
 form { display: grid; gap: 10px; margin: 0; } .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 input, button { font: inherit; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
 button { cursor: pointer; font-weight: 600; } button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
@@ -88,41 +90,58 @@ export function passkeyRequiredPage(returnTo: string): string {
   );
 }
 
-export function consentPage(uid: string, club: Club, user: User, renewing: boolean): string {
+/**
+ * `current` is the grant this club already holds, if any: when it is being renewed, what the member accepted
+ * last time is ticked again.
+ */
+export function consentPage(uid: string, club: Club, user: User, current: { live: boolean; accepted: readonly string[] }): string {
   const selfCustody = user.custody === "self";
+  const base = `/interaction/${escapeHtml(uid)}`;
+  const items = (labels: string[], kind: string) => labels.map((label) => `<li class="${kind}">${escapeHtml(label)}</li>`).join("\n  ");
+  const choices = optionalLabels(club).map(
+    (label) =>
+      `<li class="choice"><label><input type="checkbox" name="optional" value="${escapeHtml(label)}"${current.accepted.includes(label) ? " checked" : ""}><span>${escapeHtml(label)}</span></label></li>`,
+  );
   const allow = selfCustody
     ? `<button type="button" class="primary" data-passkey="grant" data-uid="${escapeHtml(uid)}">Allow with passkey</button>`
-    : `<form method="post" action="/interaction/${escapeHtml(uid)}/allow"><button class="primary">Allow</button></form>`;
+    : `<button class="primary">Allow</button>`;
   return page(
     `Connect ${club.name}`,
-    `<p class="muted">${escapeHtml(club.name)} ${renewing ? "wants to stay connected" : "wants to connect"}</p>
+    `<p class="muted">${escapeHtml(club.name)} ${current.live ? "wants to stay connected" : "wants to connect"}</p>
 <h1>${escapeHtml(clubDomain(club))}</h1>
+<form id="deny" method="post" action="${base}/deny"></form>
+<form method="post" action="${base}/allow">
 <p>It will be able to:</p>
 <ul>
-  <li class="ok">See which account is yours</li>
-  ${[...new Set(club.permissions.map((permission) => permission.label))].map((label) => `<li class="ok">${escapeHtml(label)}</li>`).join("\n  ")}
-  <li class="no">Move money</li>
-  <li class="no">Take or change your account</li>
+  ${items(["See which account is yours", ...requiredLabels(club)], "ok")}
+</ul>
+${choices.length ? `<p>Only if you tick it:</p>\n<ul>\n  ${choices.join("\n  ")}\n</ul>` : ""}
+<p>It will never be able to:</p>
+<ul>
+  ${items(["Move money", "Take or change your account"], "no")}
 </ul>
 <p class="muted">For ${club.grantDays} days, renewed when you sign in. You can disconnect it at any time.</p>
 <div class="row">
-  <form method="post" action="/interaction/${escapeHtml(uid)}/deny"><button>Cancel</button></form>
+  <button form="deny">Cancel</button>
   ${allow}
 </div>
+</form>
 <p class="error" data-passkey-error hidden></p>`,
     selfCustody,
   );
 }
 
-export type Connection = { club: Club; expiry: Date };
+/** An app a member has connected, with the optional things they accepted. */
+export type ConnectedApp = { club: Club; accepted: readonly string[]; expiry: Date };
 
-export function accountPage(user: User, connections: Connection[], message?: string): string {
+export function accountPage(user: User, connections: ConnectedApp[], message?: string): string {
   const selfCustody = user.custody === "self";
-  const rows = connections.map(({ club, expiry }) => {
+  const rows = connections.map(({ club, accepted, expiry }) => {
+    const also = accepted.length ? `<br><span class="muted">Also allowed: ${escapeHtml(accepted.join("; "))}</span>` : "";
     const remove = selfCustody
       ? `<button type="button" class="link" data-passkey="revoke" data-client="${escapeHtml(club.clientId)}">Remove</button>`
       : `<form method="post" action="/account/revoke"><input type="hidden" name="client" value="${escapeHtml(club.clientId)}"><button class="link">Remove</button></form>`;
-    return `<li><span>${escapeHtml(club.name)}<br><span class="muted">${escapeHtml(clubDomain(club))} · until ${expiry.toISOString().slice(0, 10)}</span></span>${remove}</li>`;
+    return `<li><span>${escapeHtml(club.name)}<br><span class="muted">${escapeHtml(clubDomain(club))} · until ${expiry.toISOString().slice(0, 10)}</span>${also}</span>${remove}</li>`;
   });
   return page(
     "Your account",
