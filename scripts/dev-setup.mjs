@@ -20,8 +20,8 @@ const anvil = (index) =>
   mnemonicToAccount("test test test test test test test test test test test junk", { addressIndex: index });
 const relayer = anvil(8);
 const club = anvil(9);
-const EDIT_AND_DELETE = "Edit and delete any of your posts, including ones made in other apps";
-const UNFOLLOW = "Unfollow anyone you follow, including people you followed in other apps";
+const EDIT_AND_DELETE = "Edit and delete your posts in Queens Book Club's feed";
+const FOLLOWS = "Follow and unfollow people for you. This changes who you follow in every app";
 const feed = lensAbi("IFeed");
 const graph = lensAbi("IGraph");
 
@@ -48,12 +48,13 @@ writeFileSync(
         grantee: club.address,
         grantDays: 90,
         permissions: [
-          { label: "Post and reply as you", target: local.feed, selector: selector(feed, "createPost") },
-          { label: "Follow people as you", target: local.graph, selector: selector(graph, "follow") },
-          // On a shared feed or graph these reach what the member did in any app, so they are the member's to leave out.
-          { label: EDIT_AND_DELETE, target: local.feed, selector: selector(feed, "editPost"), optional: true },
-          { label: EDIT_AND_DELETE, target: local.feed, selector: selector(feed, "deletePost"), optional: true },
-          { label: UNFOLLOW, target: local.graph, selector: selector(graph, "unfollow"), optional: true },
+          // The club's own feed: what it posts, edits or deletes there is its own content and nobody else's.
+          { label: "Post in Queens Book Club's feed as you", target: local.clubFeed, selector: selector(feed, "createPost") },
+          { label: EDIT_AND_DELETE, target: local.clubFeed, selector: selector(feed, "editPost"), optional: true },
+          { label: EDIT_AND_DELETE, target: local.clubFeed, selector: selector(feed, "deletePost"), optional: true },
+          // Who a member follows is shared by every app, so changing it is the member's to leave out.
+          { label: FOLLOWS, target: local.graph, selector: selector(graph, "follow"), optional: true },
+          { label: FOLLOWS, target: local.graph, selector: selector(graph, "unfollow"), optional: true },
         ],
       },
     ],

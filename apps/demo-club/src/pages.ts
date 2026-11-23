@@ -60,7 +60,7 @@ export function welcomePage(clubName: string, clubKey: Address, message?: Notice
     "Welcome",
     `<section>
 <h1>This month: <em>Middlemarch</em></h1>
-<p>Sign in to post your review. Reviews are posted to Lens under your own account.</p>
+<p>Sign in to post your review. Reviews go to the club's own feed on Lens, under your own account.</p>
 ${notice(message)}
 <form method="post" action="/login"><button>Sign in with Community Passport</button></form>
 <p class="muted">You'll be sent to the Passport to sign in, and back here afterwards.</p>
@@ -100,7 +100,7 @@ ${connected}
 <h2>Post a review</h2>
 <form method="post" action="/post">
   <textarea name="text" maxlength="280" placeholder="What did you think of Middlemarch?" required></textarea>
-  <div class="row"><button>Post to Lens as me</button></div>
+  <div class="row"><button>Post to the club's feed as me</button></div>
 </form>
 <p class="muted">No prompt appears: this app posts with its own key, within what you allowed.</p>
 </section>

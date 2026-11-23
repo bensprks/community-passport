@@ -48,7 +48,7 @@ echo "  1/2 Lens"
   forge script script/ActivateLaunch.s.sol --rpc-url "$RPC" --unlocked --sender "$DEPLOYER" --broadcast --silent
 )
 
-echo "  2/2 grant registry"
+echo "  2/2 grant registry and the demo club's feed"
 (
   cd "$ROOT/contracts"
   PASSPORT_ADMIN=$DEPLOYER PASSPORT_GUARDIAN=$DEPLOYER PASSPORT_UPGRADE_DELAY=0 \
@@ -57,14 +57,23 @@ echo "  2/2 grant registry"
 
 mkdir -p "$ROOT/.data"
 BOOK="$LENS/deployments/31337.json"
+
+# A feed of its own for the demo club, from Lens's factory, which anyone can use. A grant to the club names this
+# feed, so what the club posts, edits or deletes is its own content and nobody else's.
+CLUB_KEY=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720 # the local node's tenth test account
+DEPLOY_FEED='deployFeed(string,address,address[],(address,bytes32,(bool,(bytes32,bytes)[]),(bytes4,bool,bool)[])[],(bytes32,bytes)[])'
+FACTORY=$(jq -r '.LensFactory.address' "$BOOK")
+CLUB_FEED=$(cast call "$FACTORY" "$DEPLOY_FEED(address)" "" "$CLUB_KEY" "[]" "[]" "[]" --from "$DEPLOYER" --rpc-url "$RPC")
+cast send "$FACTORY" "$DEPLOY_FEED" "" "$CLUB_KEY" "[]" "[]" "[]" --unlocked --from "$DEPLOYER" --rpc-url "$RPC" >/dev/null
 REGISTRY=$(jq -r '.returns.registry.value' "$ROOT/contracts/broadcast/Deploy.s.sol/31337/run-latest.json")
-jq --arg registry "$REGISTRY" --arg rpc "$RPC" '{
+jq --arg registry "$REGISTRY" --arg rpc "$RPC" --arg clubFeed "$CLUB_FEED" '{
   chainId: 31337,
   rpcUrl: $rpc,
   grantRegistry: $registry,
   accountFactory: .AccountFactory.address,
   feed: .LensGlobalFeed.address,
-  graph: .LensGlobalGraph.address
+  graph: .LensGlobalGraph.address,
+  clubFeed: $clubFeed
 }' "$BOOK" > "$ROOT/.data/local.json"
 # The address book is the Lens repository's working file. Keep a copy and leave the submodule clean.
 cp "$BOOK" "$ROOT/.data/lens-address-book.json"
