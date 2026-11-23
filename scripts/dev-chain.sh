@@ -55,6 +55,14 @@ echo "  2/2 grant registry and the demo club's feed"
     forge script script/Deploy.s.sol --rpc-url "$RPC" --unlocked --sender "$DEPLOYER" --broadcast --silent
 )
 
+echo "  email-rooted accounts, with the stand-in for the email proof"
+(
+  cd "$ROOT/contracts"
+  # The local node's eighth test account vouches that a member sent an email. No delay, so the demo does not wait.
+  PASSPORT_EMAIL_ATTESTOR=0x14dC79964da2C08b23698B3D3cc7Ca32193d9955 PASSPORT_ENROL_DELAY=0 \
+    forge script script/DeployEmailOwners.s.sol --rpc-url "$RPC" --unlocked --sender "$DEPLOYER" --broadcast --silent
+)
+
 mkdir -p "$ROOT/.data"
 BOOK="$LENS/deployments/31337.json"
 
@@ -66,14 +74,18 @@ FACTORY=$(jq -r '.LensFactory.address' "$BOOK")
 CLUB_FEED=$(cast call "$FACTORY" "$DEPLOY_FEED(address)" "" "$CLUB_KEY" "[]" "[]" "[]" --from "$DEPLOYER" --rpc-url "$RPC")
 cast send "$FACTORY" "$DEPLOY_FEED" "" "$CLUB_KEY" "[]" "[]" "[]" --unlocked --from "$DEPLOYER" --rpc-url "$RPC" >/dev/null
 REGISTRY=$(jq -r '.returns.registry.value' "$ROOT/contracts/broadcast/Deploy.s.sol/31337/run-latest.json")
-jq --arg registry "$REGISTRY" --arg rpc "$RPC" --arg clubFeed "$CLUB_FEED" '{
+OWNER_FACTORY=$(jq -r '.returns.factory.value' "$ROOT/contracts/broadcast/DeployEmailOwners.s.sol/31337/run-latest.json")
+EMAIL_VERIFIER=$(jq -r '.returns.verifier.value' "$ROOT/contracts/broadcast/DeployEmailOwners.s.sol/31337/run-latest.json")
+jq --arg registry "$REGISTRY" --arg rpc "$RPC" --arg clubFeed "$CLUB_FEED" --arg ownerFactory "$OWNER_FACTORY" --arg emailVerifier "$EMAIL_VERIFIER" '{
   chainId: 31337,
   rpcUrl: $rpc,
   grantRegistry: $registry,
   accountFactory: .AccountFactory.address,
   feed: .LensGlobalFeed.address,
   graph: .LensGlobalGraph.address,
-  clubFeed: $clubFeed
+  clubFeed: $clubFeed,
+  ownerFactory: $ownerFactory,
+  emailVerifier: $emailVerifier
 }' "$BOOK" > "$ROOT/.data/local.json"
 # The address book is the Lens repository's working file. Keep a copy and leave the submodule clean.
 cp "$BOOK" "$ROOT/.data/lens-address-book.json"

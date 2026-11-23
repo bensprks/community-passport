@@ -24,10 +24,19 @@ form { display: grid; gap: 10px; margin: 0; } .row { display: grid; grid-templat
 input, button { font: inherit; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
 button { cursor: pointer; font-weight: 600; } button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 button.link { border: 0; background: none; color: var(--no); padding: 0; }
+a.button { display: block; text-align: center; text-decoration: none; font-weight: 600; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--ink); background: var(--ink); color: var(--bg); }
 .error { color: var(--no); } code { font-size: 13px; overflow-wrap: anywhere; }
 `;
 
-function page(title: string, body: string, script = false): string {
+/** A member's device, as a page tells the browser about it: which passkey to ask for. */
+export type Device = { keyId: string; credentialId: string };
+
+/** Which script a page needs: Mera's, for a key derived from a passkey, or the one for device passkeys. */
+type Script = false | "passkey" | "device";
+const scriptFor = (user: User): Script => (user.custody === "self" ? "passkey" : user.custody === "email" ? "device" : false);
+const devicesData = (devices: Device[]) => `<script type="application/json" id="devices">${JSON.stringify(devices).replace(/</g, "\\u003c")}</script>`;
+
+function page(title: string, body: string, script: Script = false): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -40,7 +49,7 @@ function page(title: string, body: string, script = false): string {
 <main>
 ${body}
 </main>
-${script ? '<script src="/assets/passkey.js" defer></script>' : ""}
+${script ? `<script src="/assets/${script}.js" defer></script>` : ""}
 </body>
 </html>`;
 }
@@ -60,7 +69,7 @@ ${error(message)}
 </form>
 <button type="button" data-passkey="login" data-return="${escapeHtml(returnTo)}">Sign in with a passkey</button>
 <p class="error" data-passkey-error hidden></p>`,
-    true,
+    "passkey",
   );
 }
 
@@ -86,7 +95,7 @@ export function passkeyRequiredPage(returnTo: string): string {
 <p class="muted">You secured this account with a passkey, so an email code alone can't sign in to it.</p>
 <button type="button" class="primary" data-passkey="login" data-return="${escapeHtml(returnTo)}">Sign in with your passkey</button>
 <p class="error" data-passkey-error hidden></p>`,
-    true,
+    "passkey",
   );
 }
 
@@ -101,17 +110,21 @@ export function consentPage(
   domain: string,
   user: User,
   current: { live: boolean; accepted: readonly string[] },
+  devices: Device[] = [],
 ): string {
-  const selfCustody = user.custody === "self";
+  const selfCustody = user.custody !== "passport";
+  const needsDevice = user.custody === "email" && devices.length === 0;
   const base = `/interaction/${escapeHtml(uid)}`;
   const items = (labels: string[], kind: string) => labels.map((label) => `<li class="${kind}">${escapeHtml(label)}</li>`).join("\n  ");
   const choices = optionalLabels(club).map(
     (label) =>
       `<li class="choice"><label><input type="checkbox" name="optional" value="${escapeHtml(label)}"${current.accepted.includes(label) ? " checked" : ""}><span>${escapeHtml(label)}</span></label></li>`,
   );
-  const allow = selfCustody
-    ? `<button type="button" class="primary" data-passkey="grant" data-uid="${escapeHtml(uid)}">Allow with passkey</button>`
-    : `<button class="primary">Allow</button>`;
+  const allow = needsDevice
+    ? `<a class="button primary" href="/device?return=${encodeURIComponent(`/interaction/${uid}`)}">Add this device first</a>`
+    : selfCustody
+      ? `<button type="button" class="primary" data-passkey="grant" data-uid="${escapeHtml(uid)}">Allow with passkey</button>`
+      : `<button class="primary">Allow</button>`;
   return page(
     `Connect ${club.name}`,
     `<p class="muted">${escapeHtml(club.name)} ${current.live ? "wants to stay connected" : "wants to connect"}</p>
@@ -133,8 +146,9 @@ ${choices.length ? `<p>Only if you tick it:</p>\n<ul>\n  ${choices.join("\n  ")}
   ${allow}
 </div>
 </form>
-<p class="error" data-passkey-error hidden></p>`,
-    selfCustody,
+<p class="error" data-passkey-error hidden></p>
+${devicesData(devices)}`,
+    scriptFor(user),
   );
 }
 
@@ -150,8 +164,8 @@ export type ConnectedApp = {
   expiry: Date;
 };
 
-export function accountPage(user: User, connections: ConnectedApp[], registryOn: boolean, message?: string): string {
-  const selfCustody = user.custody === "self";
+export function accountPage(user: User, connections: ConnectedApp[], registryOn: boolean, devices: Device[] = []): string {
+  const selfCustody = user.custody !== "passport";
   const rows = connections.map(({ grantee, club, asRegistered, accepted, expiry }) => {
     const remove = selfCustody
       ? `<button type="button" class="link" data-passkey="revoke" data-grantee="${escapeHtml(grantee)}">Remove</button>`
@@ -172,18 +186,39 @@ export function accountPage(user: User, connections: ConnectedApp[], registryOn:
     "Your account",
     `<h1>Your account</h1>
 <p class="muted">${escapeHtml(user.email)}<br><code>${escapeHtml(user.account)}</code></p>
-${error(message)}
 <p>Connected apps</p>
 <ul>${rows.join("\n") || `<li><span class="muted">${none}</span></li>`}</ul>
 ${rows.length || (registryOn && !selfCustody) ? turnOff : ""}
 <p class="error" data-passkey-error hidden></p>
 ${
-  selfCustody
-    ? '<p class="muted">Your passkey controls this account. We can\'t act for you or recover it.</p>'
-    : '<p class="muted">We hold the key to this account for you.</p><form method="get" action="/account/passkey"><button>Secure it with a passkey</button></form>'
+  user.custody === "email"
+    ? `<p class="muted">Your email is the root of this account, and the passkeys of your devices sign for it. We hold no key. Devices: ${devices.length}.</p><form method="get" action="/device"><button>Add this device</button></form>`
+    : selfCustody
+      ? '<p class="muted">Your passkey controls this account. We can\'t act for you or recover it.</p>'
+      : '<p class="muted">We hold the key to this account for you.</p><form method="get" action="/account/passkey"><button>Secure it with a passkey</button></form>'
 }
-<form method="post" action="/logout"><button>Sign out</button></form>`,
-    selfCustody,
+<form method="post" action="/logout"><button>Sign out</button></form>
+${devicesData(devices)}`,
+    scriptFor(user),
+  );
+}
+
+/** Where a member whose Account is rooted in their email adds the device they are on. */
+export function devicePage(user: User, returnTo: string): string {
+  return page(
+    "Add this device",
+    `<h1>Add this device</h1>
+<p>This device gets a passkey. Then your email says it is yours:</p>
+<ul>
+  <li class="ok">Create a passkey here</li>
+  <li class="ok">Reply to the email we send you</li>
+</ul>
+<p class="muted">We hold no key to your account. Your reply is what adds the device, and nobody can send it for you.</p>
+<button type="button" class="primary" data-passkey="enrol" data-name="${escapeHtml(user.email)}" data-return="${escapeHtml(returnTo)}">Create a passkey on this device</button>
+<p class="muted" data-device-status hidden>We sent you an email. Reply to it to add this device. This page moves on when your reply arrives.</p>
+<p class="error" data-passkey-error hidden></p>
+<form method="get" action="/account"><button>Not now</button></form>`,
+    "device",
   );
 }
 
@@ -200,7 +235,7 @@ export function passkeyPage(user: User, handover: "new" | "begun" | "moved"): st
 <button type="button" class="primary" data-passkey="resume">Finish with that passkey</button>
 ${handover === "begun" ? `<button type="button" data-passkey="create" data-name="${escapeHtml(user.email)}">Make a new passkey instead</button>` : ""}
 <p class="error" data-passkey-error hidden></p>`,
-      true,
+      "passkey",
     );
   }
   return page(
@@ -216,7 +251,7 @@ ${handover === "begun" ? `<button type="button" data-passkey="create" data-name=
 <button type="button" class="primary" data-passkey="create" data-name="${escapeHtml(user.email)}">Create a passkey and move my account</button>
 <p class="error" data-passkey-error hidden></p>
 <form method="get" action="/account"><button>Not now</button></form>`,
-    true,
+    "passkey",
   );
 }
 

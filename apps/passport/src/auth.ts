@@ -5,12 +5,21 @@ import { now } from "./db.ts";
 /** Sends sign-in codes. */
 export interface Mailer {
   sendCode(email: string, code: string): Promise<void>;
+  /**
+   * Asks a member to approve a new device by replying. `standInLink` is for development only: opening it stands
+   * in for the reply, which a real deployment receives as an email and proves.
+   */
+  sendDeviceRequest(email: string, standInLink: string): Promise<void>;
 }
 
 /** FOR DEVELOPMENT ONLY. Prints the code where a real mailer would send it. */
 export class ConsoleMailer implements Mailer {
   async sendCode(email: string, code: string): Promise<void> {
     console.log(`[mail] to ${email}: your Community Passport code is ${code}. Only ever type it on this site.`);
+  }
+
+  async sendDeviceRequest(email: string, standInLink: string): Promise<void> {
+    console.log(`[mail] to ${email}: reply to this email to add your device. (Development: open ${standInLink} to stand in for your reply.)`);
   }
 }
 

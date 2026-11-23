@@ -27,6 +27,16 @@ export const lensAbi = parseAbi([
   "function isAccountManager(address accountManager) view returns (bool)",
 ]);
 
+/** The parts of the email-rooted owner contracts the Passport calls. */
+export const ownerAbi = parseAbi([
+  "function create(bytes32 emailId) returns (address)",
+  "function ownerFor(bytes32 emailId) view returns (address)",
+  "function enrol(bytes32 qx, bytes32 qy, bytes emailProof) returns (bytes32)",
+  "function enrolCommand(bytes32 qx, bytes32 qy) view returns (bytes32)",
+  "function isActive(bytes32 keyId) view returns (bool)",
+  "function keyCount() view returns (uint256)",
+]);
+
 const grantedEvent = parseAbiItem("event Granted(address indexed account, address indexed grantee, bytes32 indexed scopeId, uint64 expiry)");
 
 /** Where a Lens Account's proxy keeps the address of its proxy admin (the ERC-1967 admin slot). */
@@ -128,6 +138,31 @@ export function createChain(config: Config) {
         fromBlock: "earliest",
       });
       return logs.at(-1)?.args.account;
+    },
+
+    /** Deploys the owner contract that stands for an email address, if it is not there yet, and returns it. */
+    async createOwner(factory: Address, emailId: Hex): Promise<Address> {
+      const owner = await publicClient.readContract({ address: factory, abi: ownerAbi, functionName: "ownerFor", args: [emailId] });
+      if (!(await publicClient.getCode({ address: owner }))) {
+        await inTurn(async () => mined(await relayerClient.writeContract({ address: factory, abi: ownerAbi, functionName: "create", args: [emailId] })));
+      }
+      return owner;
+    },
+
+    /** What a member's email has to approve to add this passkey to their owner contract. */
+    async enrolCommand(owner: Address, qx: Hex, qy: Hex): Promise<Hex> {
+      return publicClient.readContract({ address: owner, abi: ownerAbi, functionName: "enrolCommand", args: [qx, qy] });
+    },
+
+    /** Submits the proof that a member's email approved a device. The relayer pays and has no say. */
+    async enrolDevice(owner: Address, qx: Hex, qy: Hex, emailProof: Hex): Promise<void> {
+      await inTurn(async () =>
+        mined(await relayerClient.writeContract({ address: owner, abi: ownerAbi, functionName: "enrol", args: [qx, qy, emailProof] })),
+      );
+    },
+
+    async isDeviceActive(owner: Address, keyId: Hex): Promise<boolean> {
+      return publicClient.readContract({ address: owner, abi: ownerAbi, functionName: "isActive", args: [keyId] });
     },
 
     async isRegistryManager(account: Address): Promise<boolean> {

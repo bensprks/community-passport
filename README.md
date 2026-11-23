@@ -53,7 +53,7 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 
 | Path | What it is |
 | --- | --- |
-| [`contracts/`](contracts) | The grant registry (about 250 lines of Solidity), its deploy script and its tests. 55 tests, 8 of them against the real Lens `Account` |
+| [`contracts/`](contracts) | The grant registry (about 250 lines of Solidity), its deploy script and its tests, plus the owner contract for accounts rooted in an email. 76 tests |
 | [`packages/grants/`](packages/grants) | TypeScript helpers to build and sign grants. A club or a wallet can use them without the Passport |
 | [`apps/passport/`](apps/passport) | The Passport server: email-code sign-in, the consent screen, the page where a member sees and disconnects apps, the handover to a Mera passkey |
 | [`apps/demo-club/`](apps/demo-club) | A pretend club's app, for showing the flow in a browser: sign in through the Passport, then post in the club's own Lens feed as the member |
@@ -69,6 +69,7 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 | Key store | **Stand-in.** Keys sit encrypted in the server's database. In production a key vendor holds them and enforces the same signing rule itself |
 | Email | **Stand-in.** Codes are printed to the server's log |
 | Passkey handover | Server side complete and tested. The browser side, about 120 lines on [Mera](https://github.com/category-labs/mera), has not been tried on a real device |
+| Accounts rooted in an email | Contracts complete, and tested with real email proofs. The Passport still runs on a **stand-in** for the proof: receiving mail and making proofs are not built. The passkey page has not been tried with a real passkey |
 | Club registration | A file the operator edits |
 | Demo club app | For demonstration only: sessions in memory, a test key |
 
@@ -122,6 +123,8 @@ That starts the Passport (`http://localhost:4000`) and a pretend club's app, "Qu
 6. **Come back.** Tap "Connect again" and Allow. Then sign out of the club and sign in again: this time there is no screen at all, because you are still signed in to the Passport and the grant is live.
 7. **Turn it all off.** On the Passport's account page, tap "Turn off app access". Every grant ends and the registry comes off your Account. Connecting an app turns it back on.
 
+To run the demo with no key held for members, use `pnpm demo:email`. Adding a device there needs a browser with a passkey, and the link printed in the terminal stands in for the member's reply. See [Accounts rooted in an email](docs/email-accounts.md).
+
 The club's side is about 100 lines for sign-in ([`signin.ts`](apps/demo-club/src/signin.ts)) and 100 for acting on Lens ([`lens.ts`](apps/demo-club/src/lens.ts)).
 
 ## Docs
@@ -131,3 +134,4 @@ The club's side is about 100 lines for sign-in ([`signin.ts`](apps/demo-club/src
 3. [Passport](docs/passport.md): what a club builds, how keys are held, and what production still needs.
 4. [Changes to Lens](docs/lens-changes.md): none are needed for new accounts. One small one helps existing accounts.
 5. [Decisions](docs/decisions.md): the alternatives considered, and the open questions.
+6. [Accounts rooted in an email](docs/email-accounts.md): a second mode with no key vendor, where a member's mail provider vouches for them onchain.

@@ -19,6 +19,10 @@ remappings = [
     # the first remapping that fits an import wins.
     "lib/lens-monad-protocol/:@openzeppelin/contracts/=lib/openzeppelin-contracts-v4/contracts/",
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    # ZK Email's contracts, which check a proof that someone sent an email. Their verifier is upgradeable, so it
+    # needs OpenZeppelin's upgradeable contracts, at the same version as the rest.
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
+    "@zk-email/email-tx-builder/=lib/email-tx-builder/packages/contracts/",
     "contracts/=lib/lens-monad-protocol/contracts/",
 ]
 # Size-limit and unreachable-code warnings that come from the Lens contracts, as in their own foundry.toml.

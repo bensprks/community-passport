@@ -64,6 +64,7 @@ class Outbox implements Mailer {
   async sendCode(email: string, code: string) {
     this.codes.set(email, code);
   }
+  async sendDeviceRequest() {}
 }
 
 async function freePort(): Promise<number> {
@@ -128,6 +129,7 @@ describe("a club signs a member in through the Passport and acts for them on Len
       relayerKey: RELAYER_KEY,
       keyStoreSecret: "e2e",
       clubsFile: "",
+      custody: "vendor",
     };
     chain = createChain(config);
     await chain.publicClient.getChainId().catch(() => assert.fail("The local chain is not answering. Run `pnpm chain`."));

@@ -19,6 +19,7 @@ class Outbox implements Mailer {
   async sendCode(_email: string, code: string) {
     this.codes.push(code);
   }
+  async sendDeviceRequest() {}
 }
 
 test("a code signs in once, from the browser that asked for it", async () => {

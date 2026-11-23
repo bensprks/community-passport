@@ -1,4 +1,5 @@
 export { grantRegistryAbi } from "./abi.ts";
+export { type PasskeyAssertion, encodePasskeySignature, lowS, passkeyKeyId } from "./passkey.ts";
 export { type Scope, hashScopes, scopeOf } from "./scope.ts";
 export {
   GRANT_TYPES,
