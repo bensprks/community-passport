@@ -119,16 +119,15 @@ export function createChain(config: Config) {
       return getAddress(`0x${(word ?? "0x").slice(-40).padStart(40, "0")}`);
     },
 
-    /** The grant `grantee` holds on `account`, and whether it is live and covers exactly `scopes`. */
-    async grantStatus(account: Address, grantee: Address, scopes: readonly Scope[]) {
+    /** The grant `grantee` holds on `account`: which functions (as their hash), until when, and how long is left. */
+    async grantOf(account: Address, grantee: Address) {
       const [scopeId, expiry] = await publicClient.readContract({
         ...registry,
         functionName: "grantOf",
         args: [account, grantee],
       });
       const time = await currentTime();
-      const live = expiry > time && scopeId === hashScopes(scopes);
-      return { live, expiry, secondsLeft: live ? Number(expiry - time) : 0 };
+      return { scopeId, expiry, secondsLeft: expiry > time ? Number(expiry - time) : 0 };
     },
 
     /** Stores the list of functions in the registry if nobody has yet, and submits the owner's signed grant. */

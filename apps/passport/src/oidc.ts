@@ -4,7 +4,7 @@ import { type Adapter, type AdapterPayload, type Configuration, Provider, intera
 import type { Address } from "viem";
 import { SESSION_TTL, findSession, parseCookies, randomId } from "./auth.ts";
 import type { Chain } from "./chain.ts";
-import { type Club, clubScopes } from "./clubs.ts";
+import { type Club, readGrant } from "./clubs.ts";
 import type { Config } from "./config.ts";
 import { now, setting, userById } from "./db.ts";
 
@@ -126,7 +126,7 @@ export function createProvider(config: Config, db: DatabaseSync, clubs: Map<stri
       const accountId = ctx.oidc.session?.accountId;
       const club = ctx.oidc.client && clubs.get(ctx.oidc.client.clientId);
       if (!accountId || !club) return undefined;
-      const status = await chain.grantStatus(accountId as Address, club.grantee, clubScopes(club));
+      const status = readGrant(club, await chain.grantOf(accountId as Address, club.grantee));
       if (!status.live || status.secondsLeft < (club.grantDays * 86400) / 2) return undefined;
       const grant = new ctx.oidc.provider.Grant({ accountId, clientId: club.clientId });
       grant.addOIDCScope("openid");

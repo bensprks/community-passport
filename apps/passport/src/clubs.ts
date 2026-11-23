@@ -1,9 +1,15 @@
 import { readFileSync } from "node:fs";
-import type { Scope } from "@community-passport/grants";
+import { type Scope, hashScopes } from "@community-passport/grants";
 import { type Address, type Hex, getAddress, isAddressEqual, isHex } from "viem";
 
-/** One thing a club may do as a member, and how the consent screen words it. */
-export type Permission = { label: string; target: Address; selector: Hex };
+/**
+ * One function a club may call as a member, and how the consent screen words it. Functions with the same label
+ * are shown, and accepted or declined, as one thing. An optional one is the member's to leave out.
+ */
+export type Permission = { label: string; target: Address; selector: Hex; optional: boolean };
+
+/** How many optional things one club may ask for. It keeps the consent screen short. */
+const MAX_OPTIONAL = 6;
 
 /**
  * An app that may ask for sign-in. In this version the Passport's operator keeps the list, so a club's name and
@@ -56,10 +62,17 @@ export function parseClubs(json: string, scopeTargets: readonly Address[]): Map<
         if (!scopeTargets.some((allowed) => isAddressEqual(allowed, target))) {
           fail(index, `"${permission.label}" names ${target}, which is not one of the contracts grants may name`);
         }
-        return { label: permission.label, target, selector: permission.selector };
+        return { label: permission.label, target, selector: permission.selector, optional: permission.optional === true };
       }),
       grantDays,
     });
+    const club = clubs.get(entry.clientId) as Club;
+    const optional = optionalLabels(club);
+    if (club.permissions.every((permission) => permission.optional)) fail(index, "at least one permission must not be optional");
+    if (optional.length > MAX_OPTIONAL) fail(index, `at most ${MAX_OPTIONAL} optional permissions`);
+    if (club.permissions.some((permission) => !permission.optional && optional.includes(permission.label))) {
+      fail(index, "a label is used for both an optional and a required permission");
+    }
   });
   return clubs;
 }
@@ -68,9 +81,50 @@ export function loadClubs(file: string, scopeTargets: readonly Address[]): Map<s
   return parseClubs(readFileSync(file, "utf8"), scopeTargets);
 }
 
-/** The list of functions a member's grant to this club covers. */
-export function clubScopes(club: Club): Scope[] {
-  return club.permissions.map(({ target, selector }) => ({ target, selector }));
+/** The optional things a club asks for, by label, in the order it lists them. */
+export function optionalLabels(club: Club): string[] {
+  return [...new Set(club.permissions.filter((permission) => permission.optional).map((permission) => permission.label))];
+}
+
+/** What a member always grants a club, by label. */
+export function requiredLabels(club: Club): string[] {
+  return [...new Set(club.permissions.filter((permission) => !permission.optional).map((permission) => permission.label))];
+}
+
+/** Of what a request says the member ticked, the labels that really are this club's optional ones. */
+export function acceptedFrom(club: Club, ticked: unknown): string[] {
+  const labels = [ticked].flat();
+  return optionalLabels(club).filter((label) => labels.includes(label));
+}
+
+/** The functions a member's grant to this club covers: everything required, and the optional things they accepted. */
+export function clubScopes(club: Club, accepted: readonly string[] = []): Scope[] {
+  return club.permissions
+    .filter((permission) => !permission.optional || accepted.includes(permission.label))
+    .map(({ target, selector }) => ({ target, selector }));
+}
+
+/** A member's grant to a club as the registry holds it, read against what the club asks for today. */
+export type Connection = {
+  /** Not expired, and one of the grants this club could have been given. */
+  live: boolean;
+  /** The optional things the member accepted. */
+  accepted: string[];
+  expiry: bigint;
+  secondsLeft: number;
+};
+
+/**
+ * The registry stores a grant's functions as one hash. Trying each combination of the club's optional things
+ * tells which one the member accepted, or that the grant is not for what this club asks today.
+ */
+export function readGrant(club: Club, grant: { scopeId: Hex; expiry: bigint; secondsLeft: number }): Connection {
+  const optional = optionalLabels(club);
+  for (let choice = 0; choice < 1 << optional.length; choice++) {
+    const accepted = optional.filter((_label, bit) => choice & (1 << bit));
+    if (hashScopes(clubScopes(club, accepted)) === grant.scopeId) return { ...grant, live: grant.secondsLeft > 0, accepted };
+  }
+  return { ...grant, live: false, accepted: [] };
 }
 
 /** The domain a member is sent back to, which is what the consent screen shows largest. */

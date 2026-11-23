@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
-import { type GrantMessage, grantTypedData, randomNonce, revokeTypedData } from "@community-passport/grants";
+import { type GrantMessage, grantTypedData, hashScopes, randomNonce, revokeTypedData } from "@community-passport/grants";
 import { build } from "esbuild";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Provider } from "oidc-provider";
@@ -23,7 +23,7 @@ import {
   startEmailLogin,
 } from "./auth.ts";
 import { type Chain, lensAbi } from "./chain.ts";
-import { type Club, clubScopes } from "./clubs.ts";
+import { type Club, acceptedFrom, clubScopes, readGrant } from "./clubs.ts";
 import type { Config } from "./config.ts";
 import { type User, now, userByEmail, userById, userByOwner, userByPendingOwner } from "./db.ts";
 import type { KeyStore } from "./keystore.ts";
@@ -178,13 +178,13 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     return club;
   }
 
-  /** A fresh grant for a member to sign: this club's functions, for its number of days. */
-  async function newGrant(user: User, club: Club): Promise<GrantMessage> {
+  /** A fresh grant for a member to sign: this club's functions, with the optional ones they accepted, for its number of days. */
+  async function newGrant(user: User, club: Club, accepted: readonly string[]): Promise<GrantMessage> {
     const time = await chain.currentTime();
     return {
       account: user.account,
       grantee: club.grantee,
-      scopes: clubScopes(club),
+      scopes: clubScopes(club, accepted),
       expiry: time + BigInt(club.grantDays) * 86400n,
       nonce: randomNonce(),
       deadline: time + SIGNATURE_WINDOW,
@@ -311,8 +311,9 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
       ));
     }
     const club = clubOf(details.params.client_id);
-    const status = await chain.grantStatus(current.user.account, club.grantee, clubScopes(club));
-    res.send(views.consentPage(details.uid, club, current.user, status.live));
+    // When a grant is being renewed, what the member accepted last time is ticked again.
+    const status = readGrant(club, await chain.grantOf(current.user.account, club.grantee));
+    res.send(views.consentPage(details.uid, club, current.user, status));
   });
 
   /** For a member who holds their own key: the grant for their passkey to sign. */
@@ -320,7 +321,8 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     const details = await provider.interactionDetails(req, res);
     const current = await signedIn(req);
     if (!current) throw new HttpError(401, "Sign in first.");
-    const grant = await newGrant(current.user, clubOf(details.params.client_id));
+    const club = clubOf(details.params.client_id);
+    const grant = await newGrant(current.user, club, acceptedFrom(club, req.query.optional));
     res.type("json").send(toJson(grantTypedData(config.chainId, config.grantRegistry, grant)));
   });
 
@@ -331,7 +333,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     const { user, session } = current;
     const club = clubOf(details.params.client_id);
 
-    let grant = await newGrant(user, club);
+    let grant = await newGrant(user, club, acceptedFrom(club, req.body.optional));
     let signature: Hex;
     if (user.custody === "passport") {
       const typedData = grantTypedData(config.chainId, config.grantRegistry, grant);
@@ -350,8 +352,8 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     } catch (error) {
       // Anyone may submit a signed grant, so someone else may have got this one in first. What counts is that
       // the grant the member approved is there.
-      const status = await chain.grantStatus(user.account, club.grantee, grant.scopes);
-      if (!status.live || status.expiry !== grant.expiry) throw error;
+      const onchain = await chain.grantOf(user.account, club.grantee);
+      if (!onchain.secondsLeft || onchain.scopeId !== hashScopes(grant.scopes) || onchain.expiry !== grant.expiry) throw error;
     }
 
     const oidcGrant = new provider.Grant({ accountId: user.account, clientId: club.clientId });
@@ -378,10 +380,10 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     const current = await signedIn(req);
     if (!current) return void res.redirect(303, "/login?return=/account");
     // The registry says which apps are connected. The Passport keeps no list of its own that could disagree.
-    const connections: views.Connection[] = [];
+    const connections: views.ConnectedApp[] = [];
     for (const club of clubs.values()) {
-      const status = await chain.grantStatus(current.user.account, club.grantee, clubScopes(club));
-      if (status.live) connections.push({ club, expiry: new Date(Number(status.expiry) * 1000) });
+      const status = readGrant(club, await chain.grantOf(current.user.account, club.grantee));
+      if (status.live) connections.push({ club, accepted: status.accepted, expiry: new Date(Number(status.expiry) * 1000) });
     }
     res.send(views.accountPage(current.user, connections));
   });
@@ -419,7 +421,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
       await chain.submitRevoke({ ...revoke, signature });
     } catch (error) {
       // As with grants: if the grant is gone, the member has what they asked for.
-      if ((await chain.grantStatus(user.account, club.grantee, clubScopes(club))).live) throw error;
+      if ((await chain.grantOf(user.account, club.grantee)).secondsLeft) throw error;
     }
     if (user.custody === "passport") return void res.redirect(303, "/account");
     res.json({ redirect: "/account" });

@@ -20,6 +20,8 @@ const anvil = (index) =>
   mnemonicToAccount("test test test test test test test test test test test junk", { addressIndex: index });
 const relayer = anvil(8);
 const club = anvil(9);
+const EDIT_AND_DELETE = "Edit and delete any of your posts, including ones made in other apps";
+const UNFOLLOW = "Unfollow anyone you follow, including people you followed in other apps";
 const feed = lensAbi("IFeed");
 const graph = lensAbi("IGraph");
 
@@ -47,10 +49,11 @@ writeFileSync(
         grantDays: 90,
         permissions: [
           { label: "Post and reply as you", target: local.feed, selector: selector(feed, "createPost") },
-          { label: "Edit and delete your posts", target: local.feed, selector: selector(feed, "editPost") },
-          { label: "Edit and delete your posts", target: local.feed, selector: selector(feed, "deletePost") },
           { label: "Follow people as you", target: local.graph, selector: selector(graph, "follow") },
-          { label: "Follow people as you", target: local.graph, selector: selector(graph, "unfollow") },
+          // On a shared feed or graph these reach what the member did in any app, so they are the member's to leave out.
+          { label: EDIT_AND_DELETE, target: local.feed, selector: selector(feed, "editPost"), optional: true },
+          { label: EDIT_AND_DELETE, target: local.feed, selector: selector(feed, "deletePost"), optional: true },
+          { label: UNFOLLOW, target: local.graph, selector: selector(graph, "unfollow"), optional: true },
         ],
       },
     ],
