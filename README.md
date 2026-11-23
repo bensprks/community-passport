@@ -10,7 +10,7 @@ Unaudited reference implementation.
 - The first time, the Passport creates a Lens Account for them. That Account is who they are in every club's app.
 - When a member connects a club's app, they approve a **grant**: "this app may call these Lens functions as me, for 90 days". The grant is recorded in a small contract, the **grant registry**.
 - The club's server then posts, follows and so on with its own key. The Passport is not in that path.
-- A member can disconnect any app, and can move their Account to a passkey only they hold, using [Mera](https://github.com/category-labs/mera), Category Labs' passkey account library.
+- A member can disconnect any app, and can move their Account to a passkey only they hold, using [Mera](https://github.com/category-labs/mera).
 
 ## How it works
 
