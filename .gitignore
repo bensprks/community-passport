@@ -16,3 +16,7 @@ contracts/broadcast/
 
 # Written by scripts/dev-setup.mjs for the local chain.
 clubs.json
+
+# Noir build output, and the built page that makes a proof in a browser.
+circuits/email_proof/target/
+circuits/bench/dist/

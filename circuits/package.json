@@ -1,0 +1,20 @@
+{
+  "name": "@community-passport/circuits",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "The Noir circuit that proves a member sent an email, and the scripts that prove with it.",
+  "type": "module",
+  "dependencies": {
+    "@aztec-foundation/bb.js": "6.1.0",
+    "@noir-lang/noir_js": "1.0.0"
+  },
+  "scripts": {
+    "compile": "cd email_proof && nargo compile",
+    "prove": "node scripts/prove.mjs",
+    "bench:browser": "node bench/build.mjs && node bench/serve.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
