@@ -14,9 +14,16 @@ export class ConsoleMailer implements Mailer {
   }
 }
 
+const CODE_DIGITS = 8;
 const CODE_TTL = 10 * 60;
+/** Wrong guesses one code takes. */
 const CODE_ATTEMPTS = 5;
 const CODES_PER_HOUR = 5;
+/**
+ * Wrong guesses one address takes in a day, across all its codes. Without it, asking for code after code would
+ * buy 25 guesses an hour for ever. The price is that anyone can use up an address's guesses for the day.
+ */
+const WRONG_GUESSES_PER_DAY = 10;
 export const SESSION_TTL = 30 * 24 * 60 * 60;
 /** How recently a user must have signed in to hand their Account to a new owner. */
 export const FRESH_LOGIN = 10 * 60;
@@ -34,8 +41,15 @@ function hashCode(pendingId: string, code: string): Buffer {
   return createHash("sha256").update(`${pendingId}:${code}`).digest();
 }
 
+function wrongGuessesToday(db: DatabaseSync, email: string): number {
+  const row = db
+    .prepare("SELECT COALESCE(SUM(attempts), 0) AS count FROM email_codes WHERE email = ? AND created_at > ?")
+    .get(email, now() - 86400) as { count: number };
+  return row.count;
+}
+
 /**
- * Sends a 6-digit code and returns the id of the pending sign-in, which goes in a cookie. The code only works
+ * Sends an 8-digit code and returns the id of the pending sign-in, which goes in a cookie. The code only works
  * together with that cookie, so it is of no use in any other browser.
  */
 export async function startEmailLogin(db: DatabaseSync, mailer: Mailer, email: string): Promise<string> {
@@ -43,9 +57,9 @@ export async function startEmailLogin(db: DatabaseSync, mailer: Mailer, email: s
     .prepare("SELECT COUNT(*) AS count FROM email_codes WHERE email = ? AND created_at > ?")
     .get(email, now() - 3600) as { count: number };
   const pendingId = randomId();
-  // Past the limit nothing is sent, and the answer looks the same, so the limit says nothing about the address.
-  if (recent.count >= CODES_PER_HOUR) return pendingId;
-  const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
+  // Past a limit nothing is sent, and the answer looks the same, so the limits say nothing about the address.
+  if (recent.count >= CODES_PER_HOUR || wrongGuessesToday(db, email) >= WRONG_GUESSES_PER_DAY) return pendingId;
+  const code = randomInt(0, 10 ** CODE_DIGITS).toString().padStart(CODE_DIGITS, "0");
   db.prepare("INSERT INTO email_codes (id, email, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)").run(
     pendingId,
     email,
@@ -59,14 +73,17 @@ export async function startEmailLogin(db: DatabaseSync, mailer: Mailer, email: s
 
 /** Checks a code. Returns the email it proves, or undefined. A code works once, and takes five guesses at most. */
 export function finishEmailLogin(db: DatabaseSync, pendingId: string, code: string): string | undefined {
-  const row = db.prepare("SELECT email, code_hash, expires_at, attempts FROM email_codes WHERE id = ?").get(pendingId) as
-    | { email: string; code_hash: string; expires_at: number; attempts: number }
-    | undefined;
-  if (!row || row.expires_at <= now() || row.attempts >= CODE_ATTEMPTS) return undefined;
-  db.prepare("UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?").run(pendingId);
-  if (!timingSafeEqual(hashCode(pendingId, code.trim()), Buffer.from(row.code_hash, "hex"))) return undefined;
-  // Spent: mark it as out of attempts, and keep the row so that it still counts towards the hourly limit.
-  db.prepare("UPDATE email_codes SET attempts = ? WHERE id = ?").run(CODE_ATTEMPTS, pendingId);
+  const row = db
+    .prepare("SELECT email, code_hash, expires_at, attempts, used FROM email_codes WHERE id = ?")
+    .get(pendingId) as { email: string; code_hash: string; expires_at: number; attempts: number; used: number } | undefined;
+  if (!row || row.used || row.expires_at <= now() || row.attempts >= CODE_ATTEMPTS) return undefined;
+  if (wrongGuessesToday(db, row.email) >= WRONG_GUESSES_PER_DAY) return undefined;
+  if (!timingSafeEqual(hashCode(pendingId, code.trim()), Buffer.from(row.code_hash, "hex"))) {
+    db.prepare("UPDATE email_codes SET attempts = attempts + 1 WHERE id = ?").run(pendingId);
+    return undefined;
+  }
+  // Spent. The row stays, so that it still counts towards the limits.
+  db.prepare("UPDATE email_codes SET used = 1 WHERE id = ?").run(pendingId);
   return row.email;
 }
 
@@ -95,8 +112,8 @@ export function destroySession(db: DatabaseSync, id: string): void {
   db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
 }
 
-/** Ends every session of a user but one. */
-export function destroyOtherSessions(db: DatabaseSync, userId: string, keepId: string): void {
+/** Ends every session of a user, but for one if given. */
+export function destroyOtherSessions(db: DatabaseSync, userId: string, keepId = ""): void {
   db.prepare("DELETE FROM sessions WHERE user_id = ? AND id != ?").run(userId, keepId);
 }
 

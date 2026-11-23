@@ -26,7 +26,7 @@ test("a code signs in once, from the browser that asked for it", async () => {
   const outbox = new Outbox();
   const pending = await startEmailLogin(db, outbox, "maya@example.com");
   const code = outbox.codes[0] as string;
-  assert.match(code, /^\d{6}$/);
+  assert.match(code, /^\d{8}$/);
 
   const otherBrowser = await startEmailLogin(db, outbox, "maya@example.com");
   assert.equal(finishEmailLogin(db, otherBrowser, code), undefined);
@@ -40,9 +40,28 @@ test("a code takes five guesses at most", async () => {
   const outbox = new Outbox();
   const pending = await startEmailLogin(db, outbox, "maya@example.com");
   const code = outbox.codes[0] as string;
-  const wrong = code === "000000" ? "111111" : "000000";
+  const wrong = code === "00000000" ? "11111111" : "00000000";
   for (let guess = 0; guess < 5; guess++) assert.equal(finishEmailLogin(db, pending, wrong), undefined);
   assert.equal(finishEmailLogin(db, pending, code), undefined);
+});
+
+test("an address takes ten wrong guesses a day, however many codes are asked for", async () => {
+  const db = openDb(":memory:");
+  const outbox = new Outbox();
+  const pending = [];
+  for (let request = 0; request < 3; request++) pending.push(await startEmailLogin(db, outbox, "maya@example.com"));
+  const wrong = (code: string) => (code === "00000000" ? "11111111" : "00000000");
+  for (const round of [0, 1]) {
+    for (let guess = 0; guess < 5; guess++) finishEmailLogin(db, pending[round] as string, wrong(outbox.codes[round] as string));
+  }
+  // The third code was never guessed at, and is right, but the address is out of guesses for the day.
+  assert.equal(finishEmailLogin(db, pending[2] as string, outbox.codes[2] as string), undefined);
+  // And no new code goes out.
+  await startEmailLogin(db, outbox, "maya@example.com");
+  assert.equal(outbox.codes.length, 3);
+  // Another address is not affected.
+  const other = await startEmailLogin(db, outbox, "noor@example.com");
+  assert.equal(finishEmailLogin(db, other, outbox.codes[3] as string), "noor@example.com");
 });
 
 test("at most five codes an hour go to one address", async () => {
