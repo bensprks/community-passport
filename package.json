@@ -12,7 +12,9 @@
     "chain": "bash scripts/dev-chain.sh",
     "e2e": "pnpm --filter @community-passport/e2e test",
     "dev:setup": "node scripts/dev-setup.mjs",
-    "passport": "node --env-file-if-exists=.env apps/passport/src/main.ts"
+    "passport": "node --env-file-if-exists=.env apps/passport/src/main.ts",
+    "club": "node --env-file-if-exists=.env apps/demo-club/src/main.ts",
+    "demo": "node scripts/demo.mjs"
   },
   "devEngines": {
     "runtime": {

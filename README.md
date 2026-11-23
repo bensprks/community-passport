@@ -56,6 +56,7 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 | [`contracts/`](contracts) | The grant registry (about 250 lines of Solidity), its deploy script and its tests. 51 tests, 7 of them against the real Lens `Account` |
 | [`packages/grants/`](packages/grants) | TypeScript helpers to build and sign grants. A club or a wallet can use them without the Passport |
 | [`apps/passport/`](apps/passport) | The Passport server: email-code sign-in, the consent screen, the page where a member sees and disconnects apps, the passkey handover |
+| [`apps/demo-club/`](apps/demo-club) | A pretend club's app, for showing the flow in a browser: sign in through the Passport, then post to Lens as the member |
 | [`e2e/`](e2e) | One test that plays the whole story on a local chain: sign in, post through the registry, disconnect, hand over (including a handover cut short half-way), sign in with the member's own key |
 | [`docs/`](docs) | The design and the open decisions |
 
@@ -69,6 +70,7 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 | Email | **Stand-in.** Codes are printed to the server's log |
 | Passkey handover | Server side complete and tested. The browser side (about 120 lines, using Category Labs' Mera library) has not been tried on a real device yet |
 | Club registration | A file the operator edits |
+| Demo club app | For demonstration only: sessions in memory, a test key |
 
 ## Run it
 
@@ -102,19 +104,26 @@ In a second terminal, once the first says the contracts are deployed (about a mi
 pnpm e2e
 ```
 
-`pnpm e2e` is a scripted test: it prints results and opens no browser. To click through the pages yourself, with the chain still running:
+`pnpm e2e` is a scripted test: it prints results and opens no browser.
+
+## See it in a browser
+
+With the chain still running, in a second terminal:
 
 ```bash
-pnpm dev:setup
+pnpm demo
 ```
 
-```bash
-pnpm passport
-```
+That starts the Passport (`http://localhost:4000`) and a pretend club's app, "Queens Book Club" (`http://localhost:5001`). Everything they do lands on the local chain for real. Open the club's app and:
 
-1. Open `http://localhost:4000` and sign in with any email address. The 8-digit code is printed in the terminal running `pnpm passport`. The first sign-in creates a Lens Account on the local chain.
-2. To see the consent screen, open [this link](http://localhost:4000/auth?client_id=queens-book-club&redirect_uri=http%3A%2F%2Flocalhost%3A5001%2Fauth%2Fcallback&response_type=code&scope=openid&state=demo&nonce=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256), which is what a club's app would send a member to, and tap Allow. That records a real grant on the local chain.
-3. There is no demo club app in this version, so after Allow the browser lands on an address where nothing is listening. Go back to `http://localhost:4000` to see the app listed as connected, and to disconnect it.
+1. **Sign in.** Tap "Sign in with Community Passport". You are sent to the Passport. Type any email address; the 8-digit code is printed in the terminal, on a line starting `[passport] [mail]`. This creates a Lens Account.
+2. **Allow.** The Passport shows what the club is asking for. Tap Allow. You land back at the club, signed in, and the club shows the Lens Account the Passport told it about.
+3. **Post.** Write a review and post it. No prompt appears: the club posts with its own key, through the grant registry, and shows the post as read back from Lens.
+4. **Overreach.** Tap "Try to take over my account". The club tries to make itself a manager of your Account, and the grant registry refuses.
+5. **Disconnect.** Follow "Manage or disconnect it there" to the Passport and tap Remove. Back at the club, posting is now refused.
+6. **Come back.** Tap "Connect again" and Allow. Then sign out of the club and sign in again: this time there is no screen at all, because you are still signed in to the Passport and the grant is live.
+
+The club's side is about 100 lines for sign-in ([`signin.ts`](apps/demo-club/src/signin.ts)) and 100 for acting on Lens ([`lens.ts`](apps/demo-club/src/lens.ts)).
 
 ## Docs
 

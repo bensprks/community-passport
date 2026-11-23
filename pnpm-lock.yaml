@@ -182,6 +182,28 @@ importers:
         specifier: 2.58.4
         version: 2.58.4(typescript@7.0.2)
 
+  apps/demo-club:
+    dependencies:
+      '@community-passport/grants':
+        specifier: workspace:*
+        version: link:../../packages/grants
+      express:
+        specifier: 5.3.0
+        version: 5.3.0
+      viem:
+        specifier: 2.58.4
+        version: 2.58.4(typescript@7.0.2)
+    devDependencies:
+      '@types/express':
+        specifier: 5.0.6
+        version: 5.0.6
+      '@types/node':
+        specifier: 26.6.6
+        version: 26.6.6
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   apps/passport:
     dependencies:
       '@category-labs/mera':

@@ -58,4 +58,4 @@ writeFileSync(
     2,
   )}\n`,
 );
-console.log(`Wrote .env and clubs.json for chain ${local.chainId}. Relayer ${relayer.address}, club key ${club.address}.`);
+console.log(`Wrote clubs.json (and .env, if there was none) for chain ${local.chainId}. Relayer ${relayer.address}, club key ${club.address}.`);
