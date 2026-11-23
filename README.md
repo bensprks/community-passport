@@ -72,7 +72,9 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 
 ## Run it
 
-Needs [Foundry](https://getfoundry.sh) 1.8.0 or later, [pnpm](https://pnpm.io) 12, yarn and jq. pnpm fetches the right Node version by itself. You need read access to the Lens contracts repository, which is a submodule.
+Needs [Foundry](https://getfoundry.sh) 1.8.0 or later, [pnpm](https://pnpm.io) 12, yarn and jq. You need read access to the Lens contracts repository, which is a submodule.
+
+pnpm and yarn both come with Node 22 or later: run `corepack enable` once. The project itself runs on Node 26, which pnpm downloads on the first install. If your terminal says `pnpm: command not found`, Node's folder is not on your `PATH`.
 
 ```bash
 git clone --recurse-submodules https://github.com/bensprks/community-passport && cd community-passport
@@ -94,7 +96,7 @@ A local Monad chain with Lens and the registry deployed (leave it running):
 pnpm chain
 ```
 
-In a second terminal, the whole flow, end to end:
+In a second terminal, once the first says the contracts are deployed (about a minute), the whole flow, end to end:
 
 ```bash
 pnpm e2e
