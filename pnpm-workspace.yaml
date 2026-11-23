@@ -2,7 +2,10 @@ packages:
   - "packages/*"
   - "apps/*"
   - "e2e"
+  - "circuits"
 
 # esbuild runs an install script to place its platform binary.
 allowBuilds:
   esbuild: true
+  # An optional native speed-up for a library the prover uses. It works without it.
+  msgpackr-extract: false

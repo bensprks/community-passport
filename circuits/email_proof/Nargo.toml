@@ -1,0 +1,11 @@
+[package]
+name = "email_proof"
+type = "bin"
+authors = ["Community Passport"]
+compiler_version = ">=1.0.0"
+
+[dependencies]
+# ZK Email's Noir library, at the top of the open changes that port it to Noir 1.0 and fix several soundness
+# findings (zkemail/zkemail.nr pull requests 67 to 82). They are not merged yet, so the library is a submodule
+# pinned to that exact commit.
+zkemail = { path = "../lib/zkemail.nr/lib" }

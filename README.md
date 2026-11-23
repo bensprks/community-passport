@@ -53,7 +53,8 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 
 | Path | What it is |
 | --- | --- |
-| [`contracts/`](contracts) | The grant registry (about 250 lines of Solidity), its deploy script and its tests, plus the owner contract for accounts rooted in an email. 76 tests |
+| [`contracts/`](contracts) | The grant registry (about 250 lines of Solidity), its deploy script and its tests, plus the owner contract for accounts rooted in an email. 83 tests |
+| [`circuits/`](circuits) | The Noir circuit that proves a member sent an email, and a page that times the proof in a browser |
 | [`packages/grants/`](packages/grants) | TypeScript helpers to build and sign grants. A club or a wallet can use them without the Passport |
 | [`apps/passport/`](apps/passport) | The Passport server: email-code sign-in, the consent screen, the page where a member sees and disconnects apps, the handover to a Mera passkey |
 | [`apps/demo-club/`](apps/demo-club) | A pretend club's app, for showing the flow in a browser: sign in through the Passport, then post in the club's own Lens feed as the member |
@@ -69,7 +70,7 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 | Key store | **Stand-in.** Keys sit encrypted in the server's database. In production a key vendor holds them and enforces the same signing rule itself |
 | Email | **Stand-in.** Codes are printed to the server's log |
 | Passkey handover | Server side complete and tested. The browser side, about 120 lines on [Mera](https://github.com/category-labs/mera), has not been tried on a real device |
-| Accounts rooted in an email | Contracts complete, and tested with real email proofs. The Passport still runs on a **stand-in** for the proof: receiving mail and making proofs are not built. The passkey page has not been tried with a real passkey |
+| Accounts rooted in an email | Contracts complete, and tested with real email proofs made two ways (Noir and Circom). The Passport still runs on a **stand-in** for the proof: receiving mail and making proofs are not built. The passkey page has not been tried with a real passkey |
 | Club registration | A file the operator edits |
 | Demo club app | For demonstration only: sessions in memory, a test key |
 

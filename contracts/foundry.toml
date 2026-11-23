@@ -35,6 +35,8 @@ runs = 1024
 
 [fmt]
 line_length = 120
+# Written by circuits/scripts/prove.mjs, and kept as they come out.
+ignore = ["src/email/noir/HonkVerifier.sol", "test/fixtures/noir/NoirEmailFixture.sol"]
 
 [lint]
 lint_on_build = false
