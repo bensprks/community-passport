@@ -1,0 +1,29 @@
+{
+  "name": "@community-passport/passport",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Passport: sign-in by redirect, consent, grants and the passkey handover.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'test/*.test.ts'"
+  },
+  "dependencies": {
+    "@category-labs/mera": "0.4.0",
+    "@community-passport/grants": "workspace:*",
+    "esbuild": "0.28.2",
+    "express": "5.3.0",
+    "oidc-provider": "9.15.1",
+    "viem": "2.58.4"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "26.6.6",
+    "@types/oidc-provider": "9.13.1",
+    "typescript": "7.0.2"
+  }
+}

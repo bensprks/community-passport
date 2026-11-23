@@ -2,3 +2,7 @@ packages:
   - "packages/*"
   - "apps/*"
   - "e2e"
+
+# esbuild runs an install script to place its platform binary.
+allowBuilds:
+  esbuild: true

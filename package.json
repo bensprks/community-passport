@@ -7,10 +7,12 @@
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
+    "test": "pnpm -r --filter '!@community-passport/e2e' test",
     "test:contracts": "cd contracts && forge test",
     "chain": "bash scripts/dev-chain.sh",
-    "e2e": "pnpm --filter @community-passport/e2e test"
+    "e2e": "pnpm --filter @community-passport/e2e test",
+    "dev:setup": "node scripts/dev-setup.mjs",
+    "passport": "node --env-file-if-exists=.env apps/passport/src/main.ts"
   },
   "devEngines": {
     "runtime": {
@@ -18,5 +20,8 @@
       "version": "26.13.1",
       "onFail": "download"
     }
+  },
+  "devDependencies": {
+    "viem": "2.58.4"
   }
 }
