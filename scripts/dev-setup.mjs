@@ -23,8 +23,10 @@ const club = anvil(9);
 const feed = lensAbi("IFeed");
 const graph = lensAbi("IGraph");
 
-writeFileSync(
-  new URL(".env", root),
+// An existing .env is kept: its secret is what unlocks the keys already in the Passport's database.
+const envFile = new URL(".env", root);
+if (!existsSync(envFile)) writeFileSync(
+  envFile,
   `PASSPORT_ISSUER=http://localhost:4000
 PASSPORT_PORT=4000
 PASSPORT_RELAYER_KEY=${toHex(relayer.getHdKey().privateKey)}

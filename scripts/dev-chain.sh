@@ -31,7 +31,11 @@ ANVIL_PID=$!
 trap 'kill $ANVIL_PID 2>/dev/null' EXIT INT TERM
 until cast chain-id --rpc-url "$RPC" >/dev/null 2>&1; do sleep 0.2; done
 
-echo "Deploying Lens..."
+# A fresh node knows none of the Accounts an earlier run's Passport made, so its database starts over too.
+rm -f "$ROOT/.data/passport.sqlite"*
+
+echo "Deploying Lens and the grant registry to a local Monad node. This takes about a minute and a half..."
+echo "  1/2 Lens"
 (
   cd "$LENS"
   export MIGRATION_MODE=false
@@ -44,7 +48,7 @@ echo "Deploying Lens..."
   forge script script/ActivateLaunch.s.sol --rpc-url "$RPC" --unlocked --sender "$DEPLOYER" --broadcast --silent
 )
 
-echo "Deploying the grant registry..."
+echo "  2/2 grant registry"
 (
   cd "$ROOT/contracts"
   PASSPORT_ADMIN=$DEPLOYER PASSPORT_GUARDIAN=$DEPLOYER PASSPORT_UPGRADE_DELAY=0 \
@@ -67,5 +71,8 @@ cp "$BOOK" "$ROOT/.data/lens-address-book.json"
 rm -f "$BOOK" "$BOOK.pending"
 
 cat "$ROOT/.data/local.json"
-echo "Lens and the grant registry are deployed on $RPC (chain 31337). Ctrl-C to stop the node."
+echo
+echo "READY. Lens and the grant registry are deployed on $RPC (chain 31337)."
+echo "Leave this running and use another terminal: \`pnpm e2e\` for the test, \`pnpm passport\` for the pages."
+echo "Ctrl-C here stops the node."
 wait $ANVIL_PID

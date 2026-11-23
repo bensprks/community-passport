@@ -102,7 +102,19 @@ In a second terminal, once the first says the contracts are deployed (about a mi
 pnpm e2e
 ```
 
-To click through the pages yourself: `pnpm dev:setup`, then `pnpm passport`, then open `http://localhost:4000`. Sign-in codes appear in the server's log.
+`pnpm e2e` is a scripted test: it prints results and opens no browser. To click through the pages yourself, with the chain still running:
+
+```bash
+pnpm dev:setup
+```
+
+```bash
+pnpm passport
+```
+
+1. Open `http://localhost:4000` and sign in with any email address. The 8-digit code is printed in the terminal running `pnpm passport`. The first sign-in creates a Lens Account on the local chain.
+2. To see the consent screen, open [this link](http://localhost:4000/auth?client_id=queens-book-club&redirect_uri=http%3A%2F%2Flocalhost%3A5001%2Fauth%2Fcallback&response_type=code&scope=openid&state=demo&nonce=demo&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256), which is what a club's app would send a member to, and tap Allow. That records a real grant on the local chain.
+3. There is no demo club app in this version, so after Allow the browser lands on an address where nothing is listening. Go back to `http://localhost:4000` to see the app listed as connected, and to disconnect it.
 
 ## Docs
 

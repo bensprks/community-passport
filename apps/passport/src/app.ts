@@ -208,6 +208,8 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     return proven;
   }
 
+  app.get("/", (_req, res) => res.redirect(303, "/account"));
+
   app.get("/assets/passkey.js", (_req, res) => {
     res.type("application/javascript").send(passkeyScript);
   });

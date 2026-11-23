@@ -376,13 +376,16 @@ describe("a club signs a member in through the Passport and acts for them on Len
   }
   const keysHeld = () => (db.prepare("SELECT COUNT(*) AS count FROM keys").get() as { count: number }).count;
 
-  test("a handover that stops half-way can only be finished with the same passkey", async () => {
+  test("a handover that stops half-way can only be finished with the same passkey", async (t) => {
+    // The failure below is made on purpose. The server logs it, as it should; keep that out of the test's output.
+    const logged = t.mock.method(console, "error", () => {});
     const proxyAdmin = await chain.proxyAdminOf(account);
     assert.match((await browser.get("/account/passkey")).body, /Create a passkey and move my account/);
 
     // The proxy admin moves, then the Account's own transfer fails.
     breakNextTransfer = { to: account, when: "before" };
     assert.equal((await handOverTo(passkeyKey)).status, 500);
+    assert.match(String(logged.mock.calls[0]?.arguments[0]), /simulated/, "the server logged the failure");
     assert.ok(isAddressEqual(await chain.ownerOf(proxyAdmin), passkeyKey.address));
     assert.ok(!isAddressEqual(await chain.ownerOf(account), passkeyKey.address), "the Passport's key still owns the Account");
     assert.equal(keysHeld(), 1, "and the Passport still holds that key");
@@ -394,10 +397,12 @@ describe("a club signs a member in through the Passport and acts for them on Len
     assert.equal((await handOverTo(otherPasskey)).status, 409, "another passkey cannot finish it");
   });
 
-  test("the member takes the key over: the Account and its proxy admin move to their own key", async () => {
-    // This time everything goes through on the chain, but the Passport never hears back.
+  test("the member takes the key over: the Account and its proxy admin move to their own key", async (t) => {
+    // This time everything goes through on the chain, but the Passport never hears back. Also on purpose.
+    const logged = t.mock.method(console, "error", () => {});
     breakNextTransfer = { to: account, when: "after" };
     assert.equal((await handOverTo(passkeyKey)).status, 500);
+    assert.match(String(logged.mock.calls[0]?.arguments[0]), /simulated/, "the server logged the failure");
     assert.ok(isAddressEqual(await chain.ownerOf(account), passkeyKey.address));
     assert.ok(isAddressEqual(await chain.ownerOf(await chain.proxyAdminOf(account)), passkeyKey.address));
 
