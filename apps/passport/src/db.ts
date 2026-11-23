@@ -26,7 +26,17 @@ CREATE TABLE IF NOT EXISTS users (
   owner TEXT NOT NULL,
   custody TEXT NOT NULL CHECK (custody IN ('passport', 'self')),
   pending_owner TEXT,
+  -- Set while a handover is running, so that two cannot run at once.
+  handover_at INTEGER,
   created_at INTEGER NOT NULL
+);
+-- A member whose key exists but whose Account is not recorded yet. Written before the Account is created, so that
+-- a failure half-way leaves something to pick up from.
+CREATE TABLE IF NOT EXISTS provisioning (
+  email TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  started_at INTEGER NOT NULL
 );
 -- The development key store. A key vendor replaces this table.
 CREATE TABLE IF NOT EXISTS keys (

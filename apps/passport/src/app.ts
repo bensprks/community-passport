@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
-import { type GrantMessage, grantTypedData, hashScopes, randomNonce, revokeTypedData } from "@community-passport/grants";
+import { type GrantMessage, grantTypedData, hashScopes, randomNonce, revokeAllTypedData, revokeTypedData } from "@community-passport/grants";
 import { build } from "esbuild";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Provider } from "oidc-provider";
@@ -28,7 +28,7 @@ import type { Config } from "./config.ts";
 import { type User, now, userByEmail, userById, userByOwner, userByPendingOwner } from "./db.ts";
 import type { KeyStore } from "./keystore.ts";
 import { createProvider } from "./oidc.ts";
-import { type MemberFacts, PolicyError } from "./policy.ts";
+import { type MemberFacts, PolicyError, addRegistry, removeRegistry } from "./policy.ts";
 import * as views from "./views.ts";
 
 export type Services = {
@@ -42,6 +42,8 @@ export type Services = {
 
 /** How long a signature for a grant or a revocation stays submittable. */
 const SIGNATURE_WINDOW = 10n * 60n;
+/** How long creating a member's Account, or handing one over, may take before another attempt may start. */
+const WORK_LEASE = 120;
 
 class HttpError extends Error {
   readonly status: number;
@@ -66,7 +68,7 @@ const toJson = (value: unknown) => JSON.stringify(value, (_key, item) => (typeof
 
 export async function createApp(services: Services): Promise<{ app: express.Express; provider: Provider }> {
   const { config, db, clubs, chain, keyStore, mailer } = services;
-  const provider = createProvider(config, db, clubs, chain);
+  const provider = createProvider(config, db, clubs, chain, async (cookies) => (await memberOf(cookies))?.user.account);
   const secure = config.issuer.startsWith("https://");
   const { host, origin } = new URL(config.issuer);
 
@@ -103,10 +105,21 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     );
   }
 
-  async function signedIn(req: Request): Promise<{ session: Session; user: User } | undefined> {
-    const session = findSession(db, parseCookies(req.headers.cookie).pp_session);
-    const user = session && userById(db, session.userId);
-    return session && user ? { session, user: await settled(user, session.id) } : undefined;
+  /** Who a browser is signed in as, from its cookies. The chain is asked whether that is still true. */
+  async function memberOf(cookies: string | undefined): Promise<{ session: Session; user: User } | undefined> {
+    const session = findSession(db, parseCookies(cookies).pp_session);
+    const found = session && userById(db, session.userId);
+    if (!session || !found) return undefined;
+    // A handover that is only now being recorded ends every session, this one included: the member signs in
+    // again with the key that owns the Account.
+    const user = await settled(found);
+    if (user !== found) return undefined;
+    // An Account that changed hands outside the Passport is no longer this member's.
+    if (user.custody === "self" && !isAddressEqual(await chain.ownerOf(user.account), user.owner)) {
+      destroyOtherSessions(db, user.id);
+      return undefined;
+    }
+    return { session, user };
   }
 
   function signIn(res: Response, user: User): void {
@@ -127,15 +140,18 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
   // Two things change hands, each with one transaction from the key the Passport holds: the Account's proxy admin
   // (which could otherwise change the code the Account runs), then the Account. Either can fail or be cut short,
   // so the member's key is written down first (`pendingOwner`) and every step asks the chain what is already done.
+  // Only one handover runs for a member at a time.
 
   const ownedByPassport = async (user: User, target: Address) => isAddressEqual(await chain.ownerOf(target), user.owner);
 
-  /** Records that a member holds their own key, forgets the Passport's, and ends their other sessions. */
-  async function recordHandover(user: User, newOwner: Address, keepSession?: string): Promise<User> {
+  /**
+   * Records that a member holds their own key, forgets the Passport's, and ends their sessions: from now on only
+   * the new key signs in. The one session kept is the one that just proved it holds that key.
+   */
+  async function recordHandover(user: User, newOwner: Address, provenIn?: string): Promise<User> {
     db.prepare("UPDATE users SET owner = ?, custody = 'self', pending_owner = NULL WHERE id = ?").run(newOwner, user.id);
     await keyStore.destroy(user.id);
-    // Sessions that an email code opened elsewhere end here: from now on only the new key signs in.
-    destroyOtherSessions(db, user.id, keepSession);
+    destroyOtherSessions(db, user.id, provenIn);
     return { ...user, owner: newOwner, custody: "self", pendingOwner: null };
   }
 
@@ -143,10 +159,10 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
    * If a handover reached the chain but was never recorded here (the server stopped in between), records it now.
    * The Account moves last, so once it belongs to the member's key the whole handover is done.
    */
-  async function settled(user: User, keepSession?: string): Promise<User> {
+  async function settled(user: User): Promise<User> {
     if (user.custody !== "passport" || !user.pendingOwner) return user;
     if (!isAddressEqual(await chain.ownerOf(user.account), user.pendingOwner)) return user;
-    return recordHandover(user, user.pendingOwner, keepSession);
+    return recordHandover(user, user.pendingOwner);
   }
 
   /** Where a member's handover stands: not begun, begun with nothing moved, or part of the Account moved. */
@@ -156,20 +172,75 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     return untouched ? "begun" : "moved";
   }
 
-  async function handOver(user: User, newOwner: Address, session: Session): Promise<void> {
-    const member = await memberFacts(user, session);
-    // Once anything has moved to one key, no other key can finish the job.
-    if (!isAddressEqual(user.pendingOwner ?? newOwner, newOwner) && (await handoverState(user, member.proxyAdmin)) === "moved") {
-      throw new HttpError(409, "Finish with the passkey you already made for this account.");
-    }
-    db.prepare("UPDATE users SET pending_owner = ? WHERE id = ?").run(newOwner, user.id);
+  async function handOver(member: User, newOwner: Address, session: Session): Promise<void> {
+    // One at a time: the claim is a single statement, so two requests cannot both get it.
+    const claim = db
+      .prepare("UPDATE users SET handover_at = ? WHERE id = ? AND (handover_at IS NULL OR handover_at < ?)")
+      .run(now(), member.id, now() - WORK_LEASE);
+    if (claim.changes !== 1) throw new HttpError(409, "A move to a passkey is already under way. Try again in a few minutes.");
+    try {
+      const user = userById(db, member.id) as User;
+      const facts = await memberFacts(user, session);
+      // Once anything has moved to one key, no other key can finish the job.
+      if (!isAddressEqual(user.pendingOwner ?? newOwner, newOwner) && (await handoverState(user, facts.proxyAdmin)) === "moved") {
+        throw new HttpError(409, "Finish with the passkey you already made for this account.");
+      }
+      db.prepare("UPDATE users SET pending_owner = ? WHERE id = ?").run(newOwner, user.id);
 
-    const data = encodeFunctionData({ abi: lensAbi, functionName: "transferOwnership", args: [newOwner] });
-    for (const target of [member.proxyAdmin, user.account]) {
-      if (await ownedByPassport(user, target)) await keyStore.sendTransaction(user.id, { to: target, data }, member);
-      if (!isAddressEqual(await chain.ownerOf(target), newOwner)) throw new Error(`${target} did not change owner`);
+      const data = encodeFunctionData({ abi: lensAbi, functionName: "transferOwnership", args: [newOwner] });
+      for (const target of [facts.proxyAdmin, user.account]) {
+        if (await ownedByPassport(user, target)) await keyStore.sendTransaction(user.id, { to: target, data }, facts);
+        if (!isAddressEqual(await chain.ownerOf(target), newOwner)) throw new Error(`${target} did not change owner`);
+      }
+      await recordHandover(user, newOwner, session.id);
+    } finally {
+      db.prepare("UPDATE users SET handover_at = NULL WHERE id = ?").run(member.id);
     }
-    await recordHandover(user, newOwner, session.id);
+  }
+
+  // ---------------------------------------------------------------- Creating a member's Account
+
+  type Provisioning = { id: string; owner: Address; startedAt: number };
+
+  /**
+   * A first sign-in: a key in the key store, and a Lens Account that key owns, with the registry as manager. What
+   * is being done is written down before anything is sent, and the key is never thrown away on a failure, so a
+   * creation cut short leaves something to pick up from and not an Account nobody holds the key to.
+   */
+  async function provision(email: string): Promise<User> {
+    const busy = () => new HttpError(409, "Your account is being set up. Try again in a couple of minutes.");
+    let pending = db.prepare("SELECT user_id AS id, owner, started_at AS startedAt FROM provisioning WHERE email = ?").get(email) as
+      | Provisioning
+      | undefined;
+    if (!pending) {
+      const id = randomId();
+      const owner = await keyStore.create(id);
+      try {
+        db.prepare("INSERT INTO provisioning (email, user_id, owner, started_at) VALUES (?, ?, ?, ?)").run(email, id, owner, now());
+      } catch {
+        // Another request for the same address got there first. This key was never used for anything.
+        await keyStore.destroy(id);
+        throw busy();
+      }
+      pending = { id, owner, startedAt: now() };
+    } else {
+      // An earlier attempt did not finish. Take it over, unless it may still be running.
+      const claim = db
+        .prepare("UPDATE provisioning SET started_at = ? WHERE email = ? AND started_at = ? AND started_at < ?")
+        .run(now(), email, pending.startedAt, now() - WORK_LEASE);
+      if (claim.changes !== 1) throw busy();
+    }
+    // That earlier attempt may have created the Account without this server hearing back.
+    const account = (await chain.accountCreatedFor(pending.owner)) ?? (await chain.createAccount(pending.owner));
+    db.prepare("INSERT INTO users (id, email, account, owner, custody, created_at) VALUES (?, ?, ?, ?, 'passport', ?)").run(
+      pending.id,
+      email,
+      account,
+      pending.owner,
+      now(),
+    );
+    db.prepare("DELETE FROM provisioning WHERE email = ?").run(email);
+    return { id: pending.id, email, account, owner: pending.owner, custody: "passport", pendingOwner: null };
   }
 
   function clubOf(clientId: unknown): Club {
@@ -228,8 +299,6 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     res.send(views.codePage(email, returnTo));
   });
 
-  const creating = new Set<string>();
-
   app.post("/login/code", form, async (req, res) => {
     const returnTo = safeReturn(req.body.return);
     const pendingId = parseCookies(req.headers.cookie).pp_login ?? "";
@@ -239,32 +308,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     }
     setCookie(res, "pp_login", "", 0);
 
-    let user = userByEmail(db, email);
-    if (!user) {
-      // A first sign-in: a key in the key store, and a Lens Account that key owns, with the registry as manager.
-      // One at a time per address, so that two codes used at once cannot make two Accounts.
-      if (creating.has(email)) throw new HttpError(409, "Your account is being set up. Try again in a moment.");
-      creating.add(email);
-      const id = randomId();
-      try {
-        const owner = await keyStore.create(id);
-        const account = await chain.createAccount(owner);
-        db.prepare("INSERT INTO users (id, email, account, owner, custody, created_at) VALUES (?, ?, ?, ?, 'passport', ?)").run(
-          id,
-          email,
-          account,
-          owner,
-          now(),
-        );
-        user = { id, email, account, owner, custody: "passport", pendingOwner: null };
-      } catch (error) {
-        await keyStore.destroy(id);
-        throw error;
-      } finally {
-        creating.delete(email);
-      }
-    }
-    user = await settled(user);
+    const user = await settled(userByEmail(db, email) ?? (await provision(email)));
     // Once a member holds their own key, an inbox is not enough to sign in as them.
     if (user.custody === "self") return void res.send(views.passkeyRequiredPage(returnTo));
     signIn(res, user);
@@ -300,7 +344,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   app.get("/interaction/:uid", async (req, res) => {
     const details = await provider.interactionDetails(req, res);
-    const current = await signedIn(req);
+    const current = await memberOf(req.headers.cookie);
     if (!current) return void res.redirect(303, `/login?return=/interaction/${details.uid}`);
     if (details.prompt.name === "login") {
       return void (await provider.interactionFinished(
@@ -313,13 +357,16 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     const club = clubOf(details.params.client_id);
     // When a grant is being renewed, what the member accepted last time is ticked again.
     const status = readGrant(club, await chain.grantOf(current.user.account, club.grantee));
-    res.send(views.consentPage(details.uid, club, current.user, status));
+    // The domain shown is the one this request sends the member back to, which the protocol has already checked
+    // against the app's registration.
+    const domain = new URL(String(details.params.redirect_uri)).host;
+    res.send(views.consentPage(details.uid, club, domain, current.user, status));
   });
 
   /** For a member who holds their own key: the grant for their passkey to sign. */
   app.get("/interaction/:uid/grant-request", async (req, res) => {
     const details = await provider.interactionDetails(req, res);
-    const current = await signedIn(req);
+    const current = await memberOf(req.headers.cookie);
     if (!current) throw new HttpError(401, "Sign in first.");
     const club = clubOf(details.params.client_id);
     const grant = await newGrant(current.user, club, acceptedFrom(club, req.query.optional));
@@ -328,7 +375,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   app.post("/interaction/:uid/allow", form, json, async (req, res) => {
     const details = await provider.interactionDetails(req, res);
-    const current = await signedIn(req);
+    const current = await memberOf(req.headers.cookie);
     if (!current || details.session?.accountId !== current.user.account) throw new HttpError(401, "Sign in first.");
     const { user, session } = current;
     const club = clubOf(details.params.client_id);
@@ -346,6 +393,11 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
       if (expiry > grant.expiry) throw new HttpError(400, "That grant lasts too long.");
       grant = { ...grant, expiry, nonce: toBigInt(req.body.nonce), deadline: toBigInt(req.body.deadline) };
       signature = req.body.signature;
+    }
+    // A member who turned app access off turns it back on by connecting an app.
+    if (!(await chain.isRegistryManager(user.account))) {
+      if (user.custody !== "passport") throw new HttpError(409, "App access is off for this account. Add the grant registry as a manager from your wallet first.");
+      await keyStore.sendTransaction(user.id, { to: user.account, data: addRegistry(config.grantRegistry) }, await memberFacts(user, session));
     }
     try {
       await chain.submitGrant({ ...grant, signature });
@@ -377,37 +429,50 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
   // ---------------------------------------------------------------- A member's own page
 
   app.get("/account", async (req, res) => {
-    const current = await signedIn(req);
+    const current = await memberOf(req.headers.cookie);
     if (!current) return void res.redirect(303, "/login?return=/account");
-    // The registry says which apps are connected. The Passport keeps no list of its own that could disagree.
+    const { account } = current.user;
+    // The registry says which keys can act for the member, and every one of them is listed: also an app that
+    // changed what it asks for, changed its key, or is no longer registered here.
     const connections: views.ConnectedApp[] = [];
-    for (const club of clubs.values()) {
-      const status = readGrant(club, await chain.grantOf(current.user.account, club.grantee));
-      if (status.live) connections.push({ club, accepted: status.accepted, expiry: new Date(Number(status.expiry) * 1000) });
+    for (const grantee of await chain.granteesOf(account)) {
+      const onchain = await chain.grantOf(account, grantee);
+      if (!onchain.secondsLeft) continue;
+      const club = [...clubs.values()].find((candidate) => isAddressEqual(candidate.grantee, grantee));
+      const reading = club && readGrant(club, onchain);
+      connections.push({
+        grantee,
+        club,
+        asRegistered: reading?.live === true,
+        accepted: reading?.accepted ?? [],
+        expiry: new Date(Number(onchain.expiry) * 1000),
+      });
     }
-    res.send(views.accountPage(current.user, connections));
+    res.send(views.accountPage(current.user, connections, await chain.isRegistryManager(account)));
   });
 
-  async function newRevoke(user: User, club: Club) {
-    const time = await chain.currentTime();
-    return { account: user.account, grantee: club.grantee, nonce: randomNonce(), deadline: time + SIGNATURE_WINDOW };
+  /** The key whose grant a request is about. Any key: an app need not be registered to be disconnected. */
+  function granteeOf(value: unknown): Address {
+    if (typeof value !== "string" || !isAddress(value)) throw new HttpError(400, "Unknown app.");
+    return getAddress(value);
   }
+
+  const signatureDeadline = async () => (await chain.currentTime()) + SIGNATURE_WINDOW;
 
   /** For a member who holds their own key: the revocation for their passkey to sign. */
   app.get("/account/revoke-request", async (req, res) => {
-    const current = await signedIn(req);
+    const current = await memberOf(req.headers.cookie);
     if (!current) throw new HttpError(401, "Sign in first.");
-    const revoke = await newRevoke(current.user, clubOf(req.query.client));
+    const revoke = { account: current.user.account, grantee: granteeOf(req.query.grantee), nonce: randomNonce(), deadline: await signatureDeadline() };
     res.type("json").send(toJson(revokeTypedData(config.chainId, config.grantRegistry, revoke)));
   });
 
   app.post("/account/revoke", form, json, async (req, res) => {
-    const current = await signedIn(req);
+    const current = await memberOf(req.headers.cookie);
     if (!current) throw new HttpError(401, "Sign in first.");
     const { user, session } = current;
-    const club = clubOf(req.body.client);
 
-    let revoke = await newRevoke(user, club);
+    let revoke = { account: user.account, grantee: granteeOf(req.body.grantee), nonce: randomNonce(), deadline: await signatureDeadline() };
     let signature: Hex;
     if (user.custody === "passport") {
       const typedData = revokeTypedData(config.chainId, config.grantRegistry, revoke);
@@ -420,8 +485,45 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     try {
       await chain.submitRevoke({ ...revoke, signature });
     } catch (error) {
-      // As with grants: if the grant is gone, the member has what they asked for.
-      if ((await chain.grantOf(user.account, club.grantee)).secondsLeft) throw error;
+      // As with grants: if the grant is gone, whatever it was for, the member has what they asked for.
+      if ((await chain.grantOf(user.account, revoke.grantee)).secondsLeft) throw error;
+    }
+    if (user.custody === "passport") return void res.redirect(303, "/account");
+    res.json({ redirect: "/account" });
+  });
+
+  /** For a member who holds their own key: the message that ends every grant, for their passkey to sign. */
+  app.get("/account/revoke-all-request", async (req, res) => {
+    const current = await memberOf(req.headers.cookie);
+    if (!current) throw new HttpError(401, "Sign in first.");
+    const revokeAll = { account: current.user.account, nonce: randomNonce(), deadline: await signatureDeadline() };
+    res.type("json").send(toJson(revokeAllTypedData(config.chainId, config.grantRegistry, revokeAll)));
+  });
+
+  /**
+   * Turns app access off. Every grant on the Account ends, also ones this Passport does not know of. For a member
+   * whose key the Passport holds, the registry is then taken off the Account, so that nothing can act through it
+   * even if the registry itself were replaced. A member who holds their own key does that second part from
+   * their wallet, since it takes a transaction from their key.
+   */
+  app.post("/account/disconnect-all", form, json, async (req, res) => {
+    const current = await memberOf(req.headers.cookie);
+    if (!current) throw new HttpError(401, "Sign in first.");
+    const { user, session } = current;
+
+    let revokeAll = { account: user.account, nonce: randomNonce(), deadline: await signatureDeadline() };
+    let signature: Hex;
+    if (user.custody === "passport") {
+      const typedData = revokeAllTypedData(config.chainId, config.grantRegistry, revokeAll);
+      signature = await keyStore.signTypedData(user.id, typedData, await memberFacts(user, session));
+    } else {
+      if (!isHex(req.body.signature)) throw new HttpError(400, "Missing signature.");
+      revokeAll = { ...revokeAll, nonce: toBigInt(req.body.nonce), deadline: toBigInt(req.body.deadline) };
+      signature = req.body.signature;
+    }
+    await chain.submitRevokeAll({ ...revokeAll, signature });
+    if (user.custody === "passport" && (await chain.isRegistryManager(user.account))) {
+      await keyStore.sendTransaction(user.id, { to: user.account, data: removeRegistry(config.grantRegistry) }, await memberFacts(user, session));
     }
     if (user.custody === "passport") return void res.redirect(303, "/account");
     res.json({ redirect: "/account" });
@@ -430,7 +532,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
   // ---------------------------------------------------------------- Taking the key over
 
   app.get("/account/passkey", async (req, res) => {
-    const current = await signedIn(req);
+    const current = await memberOf(req.headers.cookie);
     if (!current) return void res.redirect(303, "/login?return=/account/passkey");
     if (current.user.custody === "self") return void res.redirect(303, "/account");
     // Moving an Account to a new owner takes a sign-in from moments ago, not an old session.
@@ -441,7 +543,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   /** Hands a member's Account to the key their passkey derives. Afterwards the Passport holds nothing for them. */
   app.post("/account/handover", json, async (req, res) => {
-    const current = await signedIn(req);
+    const current = await memberOf(req.headers.cookie);
     if (!current) throw new HttpError(401, "Sign in first.");
     if (current.user.custody !== "passport") throw new HttpError(409, "This account already has its own key.");
     await handOver(current.user, await provenAddress(req, res), current.session);

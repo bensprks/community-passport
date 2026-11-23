@@ -56,3 +56,15 @@ test("a club cannot make everything optional, or use one label both ways", () =>
   assert.throws(() => club([EDIT]), /at least one permission must not be optional/);
   assert.throws(() => club([POST, { ...POST, selector: "0x55555555", optional: true }]), /both an optional and a required/);
 });
+
+test("two apps cannot share a key, since the registry knows an app only by its key", () => {
+  const entry = (clientId: string) => ({
+    clientId,
+    name: clientId,
+    clientSecret: "secret",
+    redirectUris: [`https://${clientId}.example/callback`],
+    grantee: "0x00000000000000000000000000000000000000c1",
+    permissions: [POST],
+  });
+  assert.throws(() => parseClubs(JSON.stringify([entry("book-club"), entry("run-club")]), [feed]), /another app already uses that key/);
+});

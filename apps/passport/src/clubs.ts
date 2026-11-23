@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { type Scope, hashScopes } from "@community-passport/grants";
 import { type Address, type Hex, getAddress, isAddressEqual, isHex } from "viem";
+import type { PolicySettings } from "./policy.ts";
 
 /**
  * One function a club may call as a member, and how the consent screen words it. Functions with the same label
@@ -45,6 +46,9 @@ export function parseClubs(json: string, scopeTargets: readonly Address[]): Map<
     if (!entry.redirectUris?.length) fail(index, "at least one redirect URI is required");
     if (!entry.permissions?.length) fail(index, "at least one permission is required");
     if (clubs.has(entry.clientId)) fail(index, `duplicate clientId ${entry.clientId}`);
+    // The registry knows an app only by its key, so two apps must never share one.
+    const grantee = getAddress(entry.grantee ?? fail(index, "grantee is required"));
+    if ([...clubs.values()].some((other) => isAddressEqual(other.grantee, grantee))) fail(index, "another app already uses that key");
     const grantDays = entry.grantDays ?? 90;
     if (!Number.isInteger(grantDays) || grantDays < 1 || grantDays > 365) fail(index, "grantDays must be 1 to 365");
     clubs.set(entry.clientId, {
@@ -52,7 +56,7 @@ export function parseClubs(json: string, scopeTargets: readonly Address[]): Map<
       name: entry.name,
       clientSecret: entry.clientSecret,
       redirectUris: entry.redirectUris.map((uri) => new URL(uri).toString()),
-      grantee: getAddress(entry.grantee ?? fail(index, "grantee is required")),
+      grantee,
       permissions: entry.permissions.map((permission) => {
         if (!permission.label) fail(index, "every permission needs a label");
         if (!isHex(permission.selector) || permission.selector.length !== 10) {
@@ -79,6 +83,19 @@ export function parseClubs(json: string, scopeTargets: readonly Address[]): Map<
 
 export function loadClubs(file: string, scopeTargets: readonly Address[]): Map<string, Club> {
   return parseClubs(readFileSync(file, "utf8"), scopeTargets);
+}
+
+/** What the key store is told when it is set up: which apps a grant may be for, and what each may be given. */
+export function policySettings(chainId: number, grantRegistry: Address, clubs: Map<string, Club>): PolicySettings {
+  return {
+    chainId,
+    grantRegistry,
+    apps: [...clubs.values()].map((club) => ({
+      grantee: club.grantee,
+      scopes: clubScopes(club, optionalLabels(club)),
+      maxSeconds: club.grantDays * 86400,
+    })),
+  };
 }
 
 /** The optional things a club asks for, by label, in the order it lists them. */

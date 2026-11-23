@@ -1,12 +1,15 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { grantTypedData, revokeTypedData } from "@community-passport/grants";
+import type { grantTypedData, revokeAllTypedData, revokeTypedData } from "@community-passport/grants";
 import type { Address, Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Chain } from "./chain.ts";
 import { type MemberFacts, type PolicySettings, checkPolicy } from "./policy.ts";
 
-export type RegistryTypedData = ReturnType<typeof grantTypedData> | ReturnType<typeof revokeTypedData>;
+export type RegistryTypedData =
+  | ReturnType<typeof grantTypedData>
+  | ReturnType<typeof revokeTypedData>
+  | ReturnType<typeof revokeAllTypedData>;
 
 /**
  * Holds the key that owns a user's Account until the user takes it over. Whatever stands behind this interface
@@ -15,9 +18,9 @@ export type RegistryTypedData = ReturnType<typeof grantTypedData> | ReturnType<t
 export interface KeyStore {
   /** Makes a key for a new user and returns its address. */
   create(userId: string): Promise<Address>;
-  /** Signs a grant or a revocation for the grant registry. */
+  /** Signs a grant, or the end of one or of all of them, for the grant registry. */
   signTypedData(userId: string, typedData: RegistryTypedData, member: MemberFacts): Promise<Hex>;
-  /** Sends a transfer of ownership, of the Account or of its proxy admin. */
+  /** Sends one of the few transactions the policy allows: see policy.ts. */
   sendTransaction(userId: string, transaction: { to: Address; data: Hex }, member: MemberFacts): Promise<void>;
   /** Forgets a user's key, once it owns nothing. */
   destroy(userId: string): Promise<void>;
@@ -53,7 +56,10 @@ export class LocalKeyStore implements KeyStore {
   async signTypedData(userId: string, typedData: RegistryTypedData, member: MemberFacts): Promise<Hex> {
     checkPolicy({ kind: "typedData", ...typedData }, this.#settings, member);
     const account = this.#account(userId);
-    return typedData.primaryType === "Grant" ? account.signTypedData(typedData) : account.signTypedData(typedData);
+    // One call per kind, so that each is checked against its own types.
+    if (typedData.primaryType === "Grant") return account.signTypedData(typedData);
+    if (typedData.primaryType === "Revoke") return account.signTypedData(typedData);
+    return account.signTypedData(typedData);
   }
 
   async sendTransaction(
