@@ -84,6 +84,21 @@ abstract contract RegistryTestBase is Test {
         );
     }
 
+    function _signRevokeAll(uint256 privateKey, address account, uint256 nonce, uint256 deadline)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return _sign(
+            privateKey,
+            keccak256(
+                abi.encode(
+                    keccak256("RevokeAll(address account,uint256 nonce,uint256 deadline)"), account, nonce, deadline
+                )
+            )
+        );
+    }
+
     function _signRevoke(uint256 privateKey, address account, address grantee, uint256 nonce, uint256 deadline)
         internal
         view

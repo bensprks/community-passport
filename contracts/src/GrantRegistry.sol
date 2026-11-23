@@ -32,6 +32,8 @@ contract GrantRegistry is IGrantRegistry, Initializable {
     struct GrantData {
         bytes32 scopeId;
         uint64 expiry;
+        // The Account's round when the grant was made, see `Storage.round`.
+        uint64 round;
     }
 
     struct Storage {
@@ -43,6 +45,8 @@ contract GrantRegistry is IGrantRegistry, Initializable {
         mapping(address account => mapping(address grantee => GrantData)) grants;
         // Owners pick any unused number, so that signatures can be submitted in any order.
         mapping(address account => mapping(uint256 nonce => bool)) nonceUsed;
+        // Goes up by one each time an owner ends every grant at once. Only grants from the current round count.
+        mapping(address account => uint64) round;
     }
 
     /// @dev keccak256(abi.encode(uint256(keccak256("community-passport.storage.GrantRegistry")) - 1)) & ~0xff
@@ -63,6 +67,8 @@ contract GrantRegistry is IGrantRegistry, Initializable {
     );
     bytes32 private constant REVOKE_TYPEHASH =
         keccak256("Revoke(address account,address grantee,uint256 nonce,uint256 deadline)");
+    bytes32 private constant REVOKE_ALL_TYPEHASH =
+        keccak256("RevokeAll(address account,uint256 nonce,uint256 deadline)");
 
     function $storage() private pure returns (Storage storage _storage) {
         assembly {
@@ -149,6 +155,20 @@ contract GrantRegistry is IGrantRegistry, Initializable {
         _revoke(account, grantee);
     }
 
+    function revokeAll(address account) external override {
+        require(msg.sender == ILensAccount(account).owner(), NotOwner());
+        _revokeAll(account);
+    }
+
+    function revokeAllWithSig(address account, uint256 nonce, uint256 deadline, bytes calldata signature)
+        external
+        override
+    {
+        bytes32 structHash = keccak256(abi.encode(REVOKE_ALL_TYPEHASH, account, nonce, deadline));
+        _useOwnerSignature(account, structHash, nonce, deadline, signature);
+        _revokeAll(account);
+    }
+
     // Acting
 
     function execute(address account, address target, bytes calldata data)
@@ -159,8 +179,7 @@ contract GrantRegistry is IGrantRegistry, Initializable {
     {
         Storage storage $ = $storage();
         GrantData storage grantData = $.grants[account][msg.sender];
-        // An expiry of 0 means there is no grant.
-        require(grantData.expiry > block.timestamp, GrantNotActive());
+        require(_isActive($, account, grantData), GrantNotActive());
         // Calls without a function selector, e.g. plain transfers, are never in a scope.
         require(data.length >= 4 && $.inScope[grantData.scopeId][_functionKey(target, bytes4(data[:4]))], NotInScope());
         return ILensAccount(account).executeTransaction(target, 0, data);
@@ -180,7 +199,11 @@ contract GrantRegistry is IGrantRegistry, Initializable {
     // Views
 
     function grantOf(address account, address grantee) external view override returns (bytes32 scopeId, uint64 expiry) {
-        GrantData storage grantData = $storage().grants[account][grantee];
+        Storage storage $ = $storage();
+        GrantData storage grantData = $.grants[account][grantee];
+        if (grantData.round != $.round[account]) {
+            return (bytes32(0), 0);
+        }
         return (grantData.scopeId, grantData.expiry);
     }
 
@@ -193,7 +216,7 @@ contract GrantRegistry is IGrantRegistry, Initializable {
         Storage storage $ = $storage();
         GrantData storage grantData = $.grants[account][grantee];
         return
-            !$.paused && grantData.expiry > block.timestamp
+            !$.paused && _isActive($, account, grantData)
                 && $.inScope[grantData.scopeId][_functionKey(target, selector)];
     }
 
@@ -229,13 +252,23 @@ contract GrantRegistry is IGrantRegistry, Initializable {
         require(grantee != address(0), InvalidAddress());
         require($.scopeDefined[scopeId], UnknownScope());
         require(expiry > block.timestamp && expiry - block.timestamp <= MAX_GRANT_DURATION, InvalidExpiry());
-        $.grants[account][grantee] = GrantData({scopeId: scopeId, expiry: expiry});
+        $.grants[account][grantee] = GrantData({scopeId: scopeId, expiry: expiry, round: $.round[account]});
         emit Granted(account, grantee, scopeId, expiry);
     }
 
     function _revoke(address account, address grantee) internal {
         delete $storage().grants[account][grantee];
         emit Revoked(account, grantee);
+    }
+
+    function _revokeAll(address account) internal {
+        $storage().round[account]++;
+        emit RevokedAll(account);
+    }
+
+    /// @dev Not expired (an expiry of 0 means there is no grant), and made since the owner last ended every grant.
+    function _isActive(Storage storage $, address account, GrantData storage grantData) internal view returns (bool) {
+        return grantData.expiry > block.timestamp && grantData.round == $.round[account];
     }
 
     /// @dev Checks the Account's current owner signed `structHash`, and spends the nonce. The owner can be a

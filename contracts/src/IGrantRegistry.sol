@@ -16,6 +16,7 @@ interface IGrantRegistry {
     event ScopeDefined(bytes32 indexed scopeId, Scope[] scopes);
     event Granted(address indexed account, address indexed grantee, bytes32 indexed scopeId, uint64 expiry);
     event Revoked(address indexed account, address indexed grantee);
+    event RevokedAll(address indexed account);
     event GuardianChanged(address indexed previousGuardian, address indexed newGuardian);
     event PausedSet(bool paused);
 
@@ -71,6 +72,14 @@ interface IGrantRegistry {
     function revokeWithSig(address account, address grantee, uint256 nonce, uint256 deadline, bytes calldata signature)
         external;
 
+    /// @notice Ends every grant on `account` at once, including ones to grantees nobody remembers. Grants made
+    /// afterwards work as usual. Only the Account's owner can call this.
+    function revokeAll(address account) external;
+
+    /// @notice The same as `revokeAll`, for anyone to submit with the owner's EIP-712 signature over
+    /// `RevokeAll(address account,uint256 nonce,uint256 deadline)`.
+    function revokeAllWithSig(address account, uint256 nonce, uint256 deadline, bytes calldata signature) external;
+
     // Acting
 
     /// @notice Has `account` call `target` with `data`, sending no value. The caller must hold a grant on the
@@ -88,6 +97,7 @@ interface IGrantRegistry {
 
     // Views
 
+    /// @notice The grant `grantee` holds on `account`. Both values are zero if there is none, or if it was ended.
     function grantOf(address account, address grantee) external view returns (bytes32 scopeId, uint64 expiry);
 
     /// @notice Whether `grantee` could have `account` call that function right now.
