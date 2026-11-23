@@ -1,6 +1,14 @@
 import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
-import { type GrantMessage, grantTypedData, hashScopes, randomNonce, revokeAllTypedData, revokeTypedData } from "@community-passport/grants";
+import {
+  type GrantMessage,
+  grantTypedData,
+  hashScopes,
+  passkeyKeyId,
+  randomNonce,
+  revokeAllTypedData,
+  revokeTypedData,
+} from "@community-passport/grants";
 import { build } from "esbuild";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Provider } from "oidc-provider";
@@ -25,6 +33,7 @@ import {
 import { type Chain, lensAbi } from "./chain.ts";
 import { type Club, acceptedFrom, clubScopes, readGrant } from "./clubs.ts";
 import type { Config } from "./config.ts";
+import { type EmailProver, emailIdOf } from "./emailProof.ts";
 import { type User, now, userByEmail, userById, userByOwner, userByPendingOwner } from "./db.ts";
 import type { KeyStore } from "./keystore.ts";
 import { createProvider } from "./oidc.ts";
@@ -38,6 +47,8 @@ export type Services = {
   chain: Chain;
   keyStore: KeyStore;
   mailer: Mailer;
+  /** For accounts rooted in an email: what turns a member's email into the proof their owner contract takes. */
+  emailProver?: EmailProver;
 };
 
 /** How long a signature for a grant or a revocation stays submittable. */
@@ -61,20 +72,21 @@ function toBigInt(value: unknown): bigint {
 
 /** Only ever send a member back to one of the Passport's own pages. */
 function safeReturn(value: unknown): string {
-  return typeof value === "string" && /^\/(interaction\/[\w-]+|account(\/passkey)?)$/.test(value) ? value : "/account";
+  return typeof value === "string" && /^\/(interaction\/[\w-]+|account(\/passkey)?|device)$/.test(value) ? value : "/account";
 }
 
 const toJson = (value: unknown) => JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? item.toString() : item));
 
 export async function createApp(services: Services): Promise<{ app: express.Express; provider: Provider }> {
-  const { config, db, clubs, chain, keyStore, mailer } = services;
+  const { config, db, clubs, chain, keyStore, mailer, emailProver } = services;
   const provider = createProvider(config, db, clubs, chain, async (cookies) => (await memberOf(cookies))?.user.account);
   const secure = config.issuer.startsWith("https://");
   const { host, origin } = new URL(config.issuer);
 
-  // The browser script for the passkey pages, bundled once at start.
+  // The browser scripts, bundled once at start: one for a key derived from a passkey, one for device passkeys.
   const bundle = await build({
-    entryPoints: [fileURLToPath(new URL("./client/passkey.ts", import.meta.url))],
+    entryPoints: ["passkey", "device"].map((name) => fileURLToPath(new URL(`./client/${name}.ts`, import.meta.url))),
+    outdir: "/assets",
     bundle: true,
     format: "iife",
     platform: "browser",
@@ -82,7 +94,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     minify: true,
     write: false,
   });
-  const passkeyScript = bundle.outputFiles[0]?.text ?? "";
+  const scripts = new Map(bundle.outputFiles.map((file) => [file.path.split("/").pop() as string, file.text]));
 
   const app = express();
   app.disable("x-powered-by");
@@ -115,7 +127,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     const user = await settled(found);
     if (user !== found) return undefined;
     // An Account that changed hands outside the Passport is no longer this member's.
-    if (user.custody === "self" && !isAddressEqual(await chain.ownerOf(user.account), user.owner)) {
+    if (user.custody !== "passport" && !isAddressEqual(await chain.ownerOf(user.account), user.owner)) {
       destroyOtherSessions(db, user.id);
       return undefined;
     }
@@ -214,12 +226,16 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
       | undefined;
     if (!pending) {
       const id = randomId();
-      const owner = await keyStore.create(id);
+      // Who will own the Account: a key in the key store, or, for accounts rooted in an email, a contract that
+      // nobody holds a key to. Deploying that contract twice is harmless: it has no devices until an email adds one.
+      const owner = config.email
+        ? await chain.createOwner(config.email.ownerFactory, emailIdOf(email, config.keyStoreSecret))
+        : await keyStore.create(id);
       try {
         db.prepare("INSERT INTO provisioning (email, user_id, owner, started_at) VALUES (?, ?, ?, ?)").run(email, id, owner, now());
       } catch {
         // Another request for the same address got there first. This key was never used for anything.
-        await keyStore.destroy(id);
+        if (!config.email) await keyStore.destroy(id);
         throw busy();
       }
       pending = { id, owner, startedAt: now() };
@@ -232,15 +248,17 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     }
     // That earlier attempt may have created the Account without this server hearing back.
     const account = (await chain.accountCreatedFor(pending.owner)) ?? (await chain.createAccount(pending.owner));
-    db.prepare("INSERT INTO users (id, email, account, owner, custody, created_at) VALUES (?, ?, ?, ?, 'passport', ?)").run(
+    const custody = config.email ? "email" : "passport";
+    db.prepare("INSERT INTO users (id, email, account, owner, custody, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
       pending.id,
       email,
       account,
       pending.owner,
+      custody,
       now(),
     );
     db.prepare("DELETE FROM provisioning WHERE email = ?").run(email);
-    return { id: pending.id, email, account, owner: pending.owner, custody: "passport", pendingOwner: null };
+    return { id: pending.id, email, account, owner: pending.owner, custody, pendingOwner: null };
   }
 
   function clubOf(clientId: unknown): Club {
@@ -281,8 +299,10 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   app.get("/", (_req, res) => res.redirect(303, "/account"));
 
-  app.get("/assets/passkey.js", (_req, res) => {
-    res.type("application/javascript").send(passkeyScript);
+  app.get("/assets/:script", (req, res) => {
+    const script = scripts.get(req.params.script);
+    if (!script) return void res.sendStatus(404);
+    res.type("application/javascript").send(script);
   });
 
   // ---------------------------------------------------------------- Signing in
@@ -360,7 +380,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     // The domain shown is the one this request sends the member back to, which the protocol has already checked
     // against the app's registration.
     const domain = new URL(String(details.params.redirect_uri)).host;
-    res.send(views.consentPage(details.uid, club, domain, current.user, status));
+    res.send(views.consentPage(details.uid, club, domain, current.user, status, devicesOf(current.user)));
   });
 
   /** For a member who holds their own key: the grant for their passkey to sign. */
@@ -448,7 +468,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
         expiry: new Date(Number(onchain.expiry) * 1000),
       });
     }
-    res.send(views.accountPage(current.user, connections, await chain.isRegistryManager(account)));
+    res.send(views.accountPage(current.user, connections, await chain.isRegistryManager(account), devicesOf(current.user)));
   });
 
   /** The key whose grant a request is about. Any key: an app need not be registered to be disconnected. */
@@ -529,12 +549,94 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     res.json({ redirect: "/account" });
   });
 
+  // ---------------------------------------------------------------- Devices, for accounts rooted in an email
+  //
+  // The Passport holds no key for these members. Each device has a passkey, which the member's owner contract
+  // accepts once the member's email has approved it. The Passport asks for that email, relays the proof and pays.
+
+  /** The passkeys to ask a member's browser for. Which of them work is the owner contract's to say. */
+  function devicesOf(user: User): views.Device[] {
+    if (user.custody !== "email") return [];
+    return db.prepare("SELECT key_id AS keyId, credential_id AS credentialId FROM devices WHERE user_id = ?").all(user.id) as views.Device[];
+  }
+
+  const isWord = (value: unknown): value is Hex => isHex(value) && value.length === 66;
+
+  app.get("/device", async (req, res) => {
+    const returnTo = safeReturn(req.query.return);
+    const current = await memberOf(req.headers.cookie);
+    if (!current) return void res.redirect(303, `/login?return=${encodeURIComponent("/device")}`);
+    if (current.user.custody !== "email") return void res.redirect(303, "/account");
+    res.send(views.devicePage(current.user, returnTo));
+  });
+
+  /** A browser made a passkey. Nothing is added yet: the member's email has to approve it first. */
+  app.post("/device/enrol", json, async (req, res) => {
+    const current = await memberOf(req.headers.cookie);
+    if (!current || current.user.custody !== "email") throw new HttpError(401, "Sign in first.");
+    const { credentialId, qx, qy } = req.body ?? {};
+    if (typeof credentialId !== "string" || !/^[\w-]{1,1024}$/.test(credentialId) || !isWord(qx) || !isWord(qy)) {
+      throw new HttpError(400, "That is not a passkey.");
+    }
+    const waiting = db.prepare("SELECT COUNT(*) AS count FROM device_requests WHERE user_id = ?").get(current.user.id) as { count: number };
+    if (waiting.count >= 5) throw new HttpError(429, "Too many devices are waiting for your reply. Try again later.");
+
+    const token = randomId();
+    db.prepare("INSERT INTO device_requests (token, user_id, credential_id, qx, qy, expires_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+      token,
+      current.user.id,
+      credentialId,
+      qx,
+      qy,
+      now() + 3600,
+    );
+    await mailer.sendDeviceRequest(current.user.email, `${config.issuer}/device/reply?token=${token}`);
+    res.json({ keyId: passkeyKeyId(qx, qy) });
+  });
+
+  /**
+   * FOR DEVELOPMENT: stands in for the member's reply arriving by email. A real deployment receives the email,
+   * proves that the member's mail provider signed it, and submits that proof. Here the link carries the request,
+   * and `emailProver` vouches for it.
+   */
+  app.get("/device/reply", async (req, res) => {
+    type DeviceRequest = { userId: string; credentialId: string; qx: Hex; qy: Hex };
+    const token = String(req.query.token ?? "");
+    const request = db
+      .prepare("SELECT user_id AS userId, credential_id AS credentialId, qx, qy FROM device_requests WHERE token = ? AND expires_at > ?")
+      .get(token, now()) as DeviceRequest | undefined;
+    const user = request && userById(db, request.userId);
+    if (!request || !user || !emailProver) throw new HttpError(404, "That request is not waiting for a reply.");
+    // A reply is used once.
+    db.prepare("DELETE FROM device_requests WHERE token = ?").run(token);
+
+    const command = await chain.enrolCommand(user.owner, request.qx, request.qy);
+    const proof = await emailProver.prove(emailIdOf(user.email, config.keyStoreSecret), command);
+    await chain.enrolDevice(user.owner, request.qx, request.qy, proof);
+    db.prepare("INSERT OR REPLACE INTO devices (key_id, user_id, credential_id, qx, qy, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+      passkeyKeyId(request.qx, request.qy),
+      user.id,
+      request.credentialId,
+      request.qx,
+      request.qy,
+      now(),
+    );
+    res.send(views.messagePage("Device added", "Your reply added this device to your account. Go back to the page you were on."));
+  });
+
+  /** Whether a device's passkey works yet, for the page that is waiting on the member's reply. */
+  app.get("/device/status", async (req, res) => {
+    const current = await memberOf(req.headers.cookie);
+    if (!current || current.user.custody !== "email" || !isWord(req.query.key)) throw new HttpError(401, "Sign in first.");
+    res.json({ active: await chain.isDeviceActive(current.user.owner, req.query.key) });
+  });
+
   // ---------------------------------------------------------------- Taking the key over
 
   app.get("/account/passkey", async (req, res) => {
     const current = await memberOf(req.headers.cookie);
     if (!current) return void res.redirect(303, "/login?return=/account/passkey");
-    if (current.user.custody === "self") return void res.redirect(303, "/account");
+    if (current.user.custody !== "passport") return void res.redirect(303, "/account");
     // Moving an Account to a new owner takes a sign-in from moments ago, not an old session.
     if (now() - current.session.createdAt > FRESH_LOGIN) return void res.redirect(303, "/login?return=/account/passkey");
     const proxyAdmin = await chain.proxyAdminOf(current.user.account);

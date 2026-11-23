@@ -20,6 +20,13 @@ export type Config = {
   keyStoreSecret: string;
   /** The apps that may ask for sign-in, see clubs.example.json. */
   clubsFile: string;
+  /**
+   * Who holds the key to a new member's Account. "vendor": the key store, until the member takes it over.
+   * "email": nobody. The Account is owned by a contract rooted in the member's email, and their devices sign.
+   */
+  custody: "vendor" | "email";
+  /** For "email": where owner contracts come from, and the development stand-in for the email proof. */
+  email?: { ownerFactory: Address; verifier: Address; attestorKey: Hex };
 };
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -44,6 +51,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, root: string = 
   const relayerKey = required(env, "PASSPORT_RELAYER_KEY");
   if (!isHex(relayerKey) || relayerKey.length !== 66) throw new Error("PASSPORT_RELAYER_KEY is not a private key");
 
+  const custody = env.PASSPORT_CUSTODY ?? "vendor";
+  if (custody !== "vendor" && custody !== "email") throw new Error("PASSPORT_CUSTODY must be vendor or email");
+  const attestorKey = env.PASSPORT_EMAIL_ATTESTOR_KEY;
+  if (custody === "email" && (!isHex(attestorKey) || attestorKey.length !== 66)) {
+    throw new Error("PASSPORT_EMAIL_ATTESTOR_KEY is not a private key");
+  }
+
   return {
     issuer: env.PASSPORT_ISSUER ?? "http://localhost:4000",
     port: Number(env.PASSPORT_PORT ?? 4000),
@@ -60,5 +74,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, root: string = 
     relayerKey,
     keyStoreSecret: required(env, "PASSPORT_KEYSTORE_SECRET"),
     clubsFile: resolve(root, env.PASSPORT_CLUBS_FILE ?? "clubs.json"),
+    custody,
+    email:
+      custody === "email"
+        ? {
+            ownerFactory: getAddress(String(env.PASSPORT_OWNER_FACTORY ?? local.ownerFactory ?? required(env, "PASSPORT_OWNER_FACTORY"))),
+            verifier: getAddress(String(env.PASSPORT_EMAIL_VERIFIER ?? local.emailVerifier ?? required(env, "PASSPORT_EMAIL_VERIFIER"))),
+            attestorKey: attestorKey as Hex,
+          }
+        : undefined,
   };
 }

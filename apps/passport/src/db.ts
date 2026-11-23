@@ -3,8 +3,12 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Address } from "viem";
 
-/** Who holds the key that owns a user's Account: the Passport's key store, or the user (a passkey or a wallet). */
-export type Custody = "passport" | "self";
+/**
+ * Who holds the key that owns a user's Account. "passport": the Passport's key store. "self": the user, with a
+ * key of their own. "email": nobody: the Account is owned by a contract rooted in the user's email, and the
+ * passkeys of their devices sign for it.
+ */
+export type Custody = "passport" | "self" | "email";
 
 export type User = {
   id: string;
@@ -24,7 +28,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   account TEXT NOT NULL UNIQUE,
   owner TEXT NOT NULL,
-  custody TEXT NOT NULL CHECK (custody IN ('passport', 'self')),
+  custody TEXT NOT NULL CHECK (custody IN ('passport', 'self', 'email')),
   pending_owner TEXT,
   -- Set while a handover is running, so that two cannot run at once.
   handover_at INTEGER,
@@ -56,6 +60,25 @@ CREATE TABLE IF NOT EXISTS email_codes (
 -- Challenges handed to a browser for its key to sign. Each works once.
 CREATE TABLE IF NOT EXISTS challenges (
   id TEXT PRIMARY KEY,
+  expires_at INTEGER NOT NULL
+);
+-- The passkeys of a member's devices, for accounts rooted in an email. The owner contract says which of them
+-- work; this says which passkey to ask a browser for.
+CREATE TABLE IF NOT EXISTS devices (
+  key_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  qx TEXT NOT NULL,
+  qy TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+-- A device waiting for the member's email to approve it.
+CREATE TABLE IF NOT EXISTS device_requests (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  qx TEXT NOT NULL,
+  qy TEXT NOT NULL,
   expires_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -95,6 +118,7 @@ export function purgeExpired(db: DatabaseSync): void {
   const time = now();
   db.prepare("DELETE FROM email_codes WHERE created_at < ?").run(time - 86400);
   db.prepare("DELETE FROM challenges WHERE expires_at <= ?").run(time);
+  db.prepare("DELETE FROM device_requests WHERE expires_at <= ?").run(time);
   db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(time);
   db.prepare("DELETE FROM oidc WHERE expires_at <= ?").run(time);
 }
