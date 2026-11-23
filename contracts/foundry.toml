@@ -1,0 +1,36 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+cache_path = "cache"
+libs = ["lib"]
+solc_version = "0.8.39"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+# The EVM version and Monad execution rules (gas schedule, code size limits, precompiles) the Lens contracts are
+# built and deployed with.
+network = "monad"
+remappings = [
+    "forge-std/=lib/forge-std/src/",
+    # The Lens contracts, which only the integration tests use. They import each other as "contracts/...", and are
+    # written against OpenZeppelin 4.9, so they alone get that version. This line has to come before the next one:
+    # the first remapping that fits an import wins.
+    "lib/lens-monad-protocol/:@openzeppelin/contracts/=lib/openzeppelin-contracts-v4/contracts/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "contracts/=lib/lens-monad-protocol/contracts/",
+]
+# Size-limit and unreachable-code warnings that come from the Lens contracts, as in their own foundry.toml.
+ignored_error_codes = [5740, 5574, 3860]
+ignored_warnings_from = ["lib/"]
+deny = "warnings"
+
+[profile.default.fuzz]
+runs = 1024
+
+[fmt]
+line_length = 120
+
+[lint]
+lint_on_build = false

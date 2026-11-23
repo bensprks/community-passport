@@ -1,0 +1,13 @@
+[submodule "contracts/lib/forge-std"]
+	path = contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "contracts/lib/openzeppelin-contracts"]
+	path = contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+[submodule "contracts/lib/lens-monad-protocol"]
+	path = contracts/lib/lens-monad-protocol
+	url = https://github.com/monad-developers/lens-monad-protocol.git
+	branch = development-monad
+[submodule "contracts/lib/openzeppelin-contracts-v4"]
+	path = contracts/lib/openzeppelin-contracts-v4
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
