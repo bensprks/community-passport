@@ -1,6 +1,6 @@
 # Passport
 
-The server in [`apps/passport`](../apps/passport): about 1,500 lines of TypeScript. It does three jobs.
+The server in [`apps/passport`](../apps/passport): about 1,700 lines of TypeScript. It does three jobs.
 
 1. It is a sign-in service for clubs' apps.
 2. It holds each member's key until they take it over, and signs grants with it when the member says so.
@@ -41,7 +41,7 @@ The end-to-end test, [`e2e/flow.test.ts`](../e2e/flow.test.ts), plays the club's
 
 ## Signing in to the Passport
 
-**Email code.** Six digits, good for ten minutes and five guesses, at most five codes an hour to one address. A code only works in the browser that asked for it, and is only ever typed on the Passport's own page. No app can submit a code for a member.
+**Email code.** Eight digits, good for ten minutes and five guesses. At most five codes an hour go to one address, and an address takes ten wrong guesses a day across all its codes. A code only works in the browser that asked for it, and is only ever typed on the Passport's own page. No app can submit a code for a member.
 
 **Passkey**, for members who have taken their key over. The browser derives the key from the passkey, signs a one-time challenge from the server, and the server checks that the signing address owns the member's Account onchain.
 
@@ -51,7 +51,7 @@ The Passport's own session lasts 30 days. A club's sign-in request is answered w
 
 It shows the club's domain, large. A club's name is whatever it claims to be, but its domain is where the member is actually sent back to. Under it, what the club is asking for in plain words, then what it can never do, then how long the grant lasts.
 
-Whether a member needs to see this screen is decided by the registry, not by a record the Passport keeps. If the club's grant on the member's Account is live, and matches what the club asks for today, there is no screen. If the club's list of functions has changed, the grant no longer matches and the member is asked again.
+Whether a member needs to see this screen is decided by the registry, not by a record the Passport keeps. The same goes for the list of connected apps on the member's account page: the Passport keeps no list of its own that could disagree with the chain. If the club's grant on the member's Account is live, and matches what the club asks for today, there is no screen. If the club's list of functions has changed, the grant no longer matches and the member is asked again.
 
 ## How keys are held
 
@@ -59,17 +59,17 @@ Each member's Account is owned by one key. Until the member takes it over, the P
 
 | Request | Answer |
 | --- | --- |
-| Sign a grant or a revocation, for the grant registry, on this chain, for this member's own Account | Allow |
+| Sign a grant or a revocation, for the grant registry, on this chain, for this member's own Account. A grant may only name functions on the Lens contracts the operator listed | Allow |
 | Send "transfer ownership" to this member's Account or to its proxy admin, when the member signed in within the last ten minutes | Allow |
 | Anything else | Refuse |
 
-So the key cannot sign a transaction that posts, moves tokens, adds a manager or calls any other contract, and cannot sign a message for any other site.
+So the key cannot sign a transaction that posts, moves tokens, adds a manager or calls any other contract, cannot sign a grant that points at a token, and cannot sign a message for any other site.
 
 **In this version** the key store is a stand-in: keys are encrypted in the server's database, and the rule runs in the server. That is fine for a demo and wrong for production, because whoever controls the server controls the keys.
 
 **In production** a key vendor holds the keys in a sealed server and enforces the rule there. The same interface ([`keystore.ts`](../apps/passport/src/keystore.ts)) is what a vendor adapter would implement. Two things the vendor must be able to do, which we believe the main ones can but have not built against:
 
-- Pin signatures of structured messages to one contract address and chain.
+- Pin signatures of structured messages to one contract address and chain, and check the contracts a grant names against a list.
 - Check for itself that the member signed in recently before it allows a handover, for example by verifying a token from the Passport's sign-in or its own email code. Without this, a compromised Passport server could hand Accounts to an attacker.
 
 ## Taking the key over
@@ -80,6 +80,8 @@ On the account page a member can choose "Secure it with a passkey".
 2. The browser proves it holds the key by signing a one-time challenge.
 3. The Passport transfers the Account's **proxy admin** to the new key, then the **Account** itself. A Lens Account has both: see [Changes to Lens](lens-changes.md).
 4. The Passport deletes its copy of the old key and ends the member's sessions on other devices.
+
+The member's new key is written down before anything moves, and each step asks the chain what is already done. So a handover that is cut short (a failed transaction, a server restart) is finished the next time, with the same passkey. Once anything has moved to one passkey's key, no other key can finish it.
 
 After that:
 

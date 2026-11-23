@@ -50,7 +50,7 @@ A **relayer** is a key that submits other people's signed messages and pays the 
 
 ## The flows
 
-**First sign-in.** The club sends the member's browser to the Passport. The member types their email, then the 6-digit code. The Passport makes a key in the key store and creates a Lens Account owned by that key, with the registry as its only manager. One transaction, paid by the relayer.
+**First sign-in.** The club sends the member's browser to the Passport. The member types their email, then the 8-digit code. The Passport makes a key in the key store and creates a Lens Account owned by that key, with the registry as its only manager. One transaction, paid by the relayer.
 
 **Connecting an app.** The Passport shows the club's domain and what it is asking for, in plain words. The member taps Allow. The key store signs a grant, the relayer submits it, and the member is sent back to the club with a one-time code. The club's server swaps the code for an ID token, a signed statement from the Passport that says "this is Account 0x…". Nothing else is in it: not the email, not a name.
 
@@ -66,8 +66,8 @@ A **relayer** is a key that submits other people's signed messages and pays the 
 
 | Party | Trusted with | If it is compromised |
 | --- | --- | --- |
-| A club | Its own key | The attacker can do what the club's grants allow, to the members who connected that club, until they are revoked or expire. Nothing else, and no other club's members |
-| The Passport and its key store (members who have not taken their key) | Signing grants only when the member taps Allow. Handing an Account over only to its member | The attacker could grant themselves the ability to post and follow as those members, or hand Accounts to themselves. They could not move tokens through a grant. See "Limits" below |
+| A club | Its own key | The attacker can do what the club's grants allow (posting, following and so on), to the members who connected that club, until they are revoked or expire. Nothing else, and no other club's members |
+| The Passport and its key store (members who have not taken their key) | Signing grants only when the member taps Allow. Handing an Account over only to its member | With the server alone: the attacker could grant themselves the ability to post and follow as those members. The key store refuses a grant that names anything but the listed Lens contracts, so tokens stay out of reach, and refuses a handover without a fresh sign-in. With the key store as well: everything those keys own. See "Limits" below |
 | The Passport (members who hold their own key) | Showing the right thing on the consent screen | The attacker could show a misleading screen. The member's signature is still needed for every grant |
 | The registry's admin | Upgrades, after the delay | A bad upgrade could misuse every Account that has the registry as a manager. The delay is the time to notice and remove it |
 | The registry's guardian | Pausing | Apps stop working until it is resumed. Revoking still works while paused |
@@ -92,7 +92,8 @@ Off chain, the running costs are a small server, a database, email (cents per th
 ## Limits of this version
 
 - **The Passport is a custodian until a member takes their key.** The signing rule narrows what it can do to grants and handovers, but within that the member is trusting MF and the key vendor. The rule only protects members from a compromised Passport server if the key vendor enforces it and checks the member's sign-in itself. The development key store here does neither: it runs inside the server.
-- **Email is the root of trust** for members who have not taken their key. There is no second factor.
+- **Email is the root of trust** for members who have not taken their key. There is no second factor. A code is 8 digits and an address takes ten wrong guesses a day, which also means someone who knows a member's address can use up their guesses and keep them out for the day. Production needs limits per network address in front of this.
+- **Grants stay with the Account.** They survive a handover, and they come back if a member removes the registry from their Account and later adds it again. That is deliberate (clubs keep working when a member takes their key), but there is no "disconnect everything" in one step yet. See [Decisions](decisions.md).
 - **After a handover there is no recovery.** A member who loses their passkey, and has no synced copy, loses the Account. A recovery address would fix this and is not built.
 - **Passkeys are tied to the Passport's domain for good.** If the domain changes, every passkey stops deriving its key. Choose the domain once.
 - **A grant names functions, not arguments.** "May call `createPost` on the global feed" cannot be narrowed to "only in this club's group". Lens's own rules on feeds and groups still apply.

@@ -63,12 +63,20 @@ flowchart LR
 
 These hold because of how the registry sits on the Account, and are tested against the real Lens `Account` in [`LensAccount.t.sol`](../contracts/test/LensAccount.t.sol):
 
-- **Move the Account's tokens.** The registry is a manager without Lens's token permission, so the Account itself refuses token transfers and approvals that come through it.
 - **Move the Account's MON.** `execute` sends none.
 - **Change the Account's owner or managers.** Those functions answer only to the owner.
 - **Reach an Account that has not added the registry.**
 
 And if a member removes the registry from their Account, every grant on that Account stops working at once.
+
+## Tokens
+
+**A grant must never name a token contract**, or any contract that holds value for the Account. The registry does not judge what a grant lists: it enforces exactly what the owner signed. Keeping tokens out is the job of whoever asks for the signature:
+
+- The Passport only registers clubs, and its key store only signs grants, whose functions are on a fixed list of Lens contracts (feeds, graphs and so on).
+- A member who signs with their own wallet sees every contract and function in the message.
+
+There is a second line of defence: the registry is a manager without Lens's token permission, so the Account applies its own checks to standard token transfers and approvals that come through it. Treat that as a backstop and not as the guarantee.
 
 ## Who controls it
 
@@ -91,11 +99,11 @@ flowchart LR
 
 | Risk | What limits it |
 | --- | --- |
-| A club's key leaks | The attacker gets that club's grants only: the listed functions, on the members who connected that club, until expiry. The club or each member can revoke. No tokens can move |
+| A club's key leaks | The attacker gets that club's grants only: the listed Lens functions, on the members who connected that club, until expiry. The club or each member can revoke |
 | A relayer submits a signature late, or twice, or to another registry | Deadline, single-use number, chain and registry address are all signed |
 | Someone watching the network submits a member's signed grant first | The outcome is the one the member signed, so nothing is gained. The relayer's own submission then fails and the member sees an error, but the grant is live and their next sign-in goes straight through |
-| A member is tricked into signing a grant | The signed message lists every function. A grant cannot include moving tokens or changing the Account, whatever it lists |
-| A scope lists a dangerous function on some other contract | The registry does not judge scopes. Whoever writes the consent screen must: in this version the operator registers each club and its list |
+| A member is tricked into signing a grant | The signed message lists every contract and function. Whatever it lists, it cannot change the Account's owner or managers or send its MON. See "Tokens" above for why the list matters |
+| A scope lists a function on a token or some other contract | The registry does not judge scopes. The Passport does: it refuses to register or sign anything outside its list of Lens contracts |
 | A flaw in the registry | The guardian pauses. Members can still revoke, or remove the registry from their Account. An upgrade follows after the delay |
 | The admin key is stolen | The attacker must schedule in public and wait out the delay |
 | A grant outlives a member's interest | Expiry, a year at most. 90 days by default in the Passport |
@@ -107,7 +115,7 @@ flowchart LR
 cd contracts && forge test
 ```
 
-50 tests. 39 cover the registry on its own, including every rule above and two fuzz tests ("only ever calls a function in the grant", "expiry is always within a year"). 7 run against the real Lens `Account`. 4 cover the deploy script and the upgrade delay.
+51 tests. 40 cover the registry on its own, including every rule above and two fuzz tests ("only ever calls a function in the grant", "expiry is always within a year"). 7 run against the real Lens `Account`. 4 cover the deploy script and the upgrade delay.
 
 Not done: an audit, and a formal check of the storage layout across upgrades (the storage sits at a fixed, namespaced location, and one test checks that an upgrade keeps grants and signatures working).
 

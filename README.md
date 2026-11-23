@@ -26,7 +26,7 @@ sequenceDiagram
 
     M->>C: Tap "Sign in"
     C->>P: Send the member to the Passport
-    M->>P: Email, then the 6-digit code
+    M->>P: Email, then the 8-digit code
     P->>A: First time only: create the Account, with the registry as its one manager
     M->>P: Tap "Allow"
     P->>R: Grant, signed by the key that owns the Account
@@ -43,8 +43,8 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 
 | Who | Can | Cannot |
 | --- | --- | --- |
-| A club's app | Call the functions in its grant, as the member, until the grant expires or is revoked | Call anything else. Move the member's tokens or MON. Change the Account's owner or managers |
-| The Passport, while it holds a member's key | Sign grants and revocations for that member. Hand the Account to the member's own key | Sign anything else: the key store refuses it ([the rule](apps/passport/src/policy.ts)) |
+| A club's app | Call the Lens functions in its grant, as the member, until the grant expires or is revoked | Call anything else. Move the member's MON. Change the Account's owner or managers. Reach a token: grants only name Lens contracts |
+| The Passport, while it holds a member's key | Sign grants and revocations for that member, for functions on the listed Lens contracts. Hand the Account to the member's own key | Sign anything else: the key store refuses it ([the rule](apps/passport/src/policy.ts)) |
 | The Passport, after a member takes their key | Show pages and relay what the member signs | Sign anything for that member. Sign them in from an email code |
 | A member | Disconnect any app. Take their key over. Remove the registry from their Account, which ends every grant at once | |
 | Whoever runs the registry (MF) | Pause it. Upgrade it, after a public delay (7 days by default) | Upgrade it without the delay. Touch an Account that never added the registry |
@@ -53,10 +53,10 @@ Steps 1 to 7 are a standard web sign-in (OpenID Connect, the protocol behind "Si
 
 | Path | What it is |
 | --- | --- |
-| [`contracts/`](contracts) | The grant registry (about 250 lines of Solidity), its deploy script and its tests. 50 tests, 7 of them against the real Lens `Account` |
+| [`contracts/`](contracts) | The grant registry (about 250 lines of Solidity), its deploy script and its tests. 51 tests, 7 of them against the real Lens `Account` |
 | [`packages/grants/`](packages/grants) | TypeScript helpers to build and sign grants. A club or a wallet can use them without the Passport |
 | [`apps/passport/`](apps/passport) | The Passport server: email-code sign-in, the consent screen, the page where a member sees and disconnects apps, the passkey handover |
-| [`e2e/`](e2e) | One test that plays the whole story on a local chain: sign in, post through the registry, disconnect, hand over, sign in with the member's own key |
+| [`e2e/`](e2e) | One test that plays the whole story on a local chain: sign in, post through the registry, disconnect, hand over (including a handover cut short half-way), sign in with the member's own key |
 | [`docs/`](docs) | The design and the open decisions |
 
 ## What is real and what is a stand-in
