@@ -18,7 +18,7 @@ if (!existsSync(localFile) || !existsSync(clubsFile)) {
   console.error("Run `pnpm chain` in another terminal, then `pnpm dev:setup`, before starting the demo club.");
   process.exit(1);
 }
-const local = JSON.parse(readFileSync(localFile, "utf8")) as { chainId: number; rpcUrl: string; grantRegistry: Address; feed: Address };
+const local = JSON.parse(readFileSync(localFile, "utf8")) as { chainId: number; rpcUrl: string; grantRegistry: Address; clubFeed: Address };
 
 // The club's own registration with the Passport: here it is read from the operator's file, since both run on one
 // machine. A real club is given its client id and secret by the operator.
@@ -41,7 +41,8 @@ const testKey = () =>
   toHex(mnemonicToAccount("test test test test test test test test test test test junk", { addressIndex: 9 }).getHdKey().privateKey as Uint8Array);
 const clubKey = (process.env.CLUB_KEY ?? testKey()) as Hex;
 if (!isHex(clubKey) || clubKey.length !== 66) throw new Error("CLUB_KEY is not a private key");
-const lens = createLens({ ...local, clubKey });
+// The club posts in a feed of its own, which is the one contract its members' grants name.
+const lens = createLens({ ...local, feed: local.clubFeed, clubKey });
 
 type Session = { account: Address; notice?: Notice };
 const sessions = new Map<string, Session>();

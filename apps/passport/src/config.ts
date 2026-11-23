@@ -38,7 +38,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, root: string = 
   const local: Record<string, string | number> = existsSync(localFile)
     ? JSON.parse(readFileSync(localFile, "utf8"))
     : {};
-  const localTargets = [local.feed, local.graph].filter(Boolean).join(",");
+  const localTargets = [local.feed, local.graph, local.clubFeed].filter(Boolean).join(",");
   const scopeTargets = env.PASSPORT_SCOPE_TARGETS ?? (localTargets || required(env, "PASSPORT_SCOPE_TARGETS"));
 
   const relayerKey = required(env, "PASSPORT_RELAYER_KEY");
