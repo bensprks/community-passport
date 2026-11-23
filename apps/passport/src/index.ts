@@ -5,4 +5,4 @@ export { type Club, type Permission, clubDomain, clubScopes, loadClubs, parseClu
 export { type Config, loadConfig } from "./config.ts";
 export { type Custody, type User, openDb } from "./db.ts";
 export { type KeyStore, LocalKeyStore } from "./keystore.ts";
-export { type PolicyContext, PolicyError, type SignRequest, checkPolicy } from "./policy.ts";
+export { type MemberFacts, PolicyError, type PolicySettings, type SignRequest, checkPolicy } from "./policy.ts";

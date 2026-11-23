@@ -4,7 +4,7 @@ import type { grantTypedData, revokeTypedData } from "@community-passport/grants
 import type { Address, Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Chain } from "./chain.ts";
-import { type PolicyContext, checkPolicy } from "./policy.ts";
+import { type MemberFacts, type PolicySettings, checkPolicy } from "./policy.ts";
 
 export type RegistryTypedData = ReturnType<typeof grantTypedData> | ReturnType<typeof revokeTypedData>;
 
@@ -16,9 +16,9 @@ export interface KeyStore {
   /** Makes a key for a new user and returns its address. */
   create(userId: string): Promise<Address>;
   /** Signs a grant or a revocation for the grant registry. */
-  signTypedData(userId: string, typedData: RegistryTypedData, context: PolicyContext): Promise<Hex>;
+  signTypedData(userId: string, typedData: RegistryTypedData, member: MemberFacts): Promise<Hex>;
   /** Sends a transfer of ownership, of the Account or of its proxy admin. */
-  sendTransaction(userId: string, transaction: { to: Address; data: Hex }, context: PolicyContext): Promise<void>;
+  sendTransaction(userId: string, transaction: { to: Address; data: Hex }, member: MemberFacts): Promise<void>;
   /** Forgets a user's key, once it owns nothing. */
   destroy(userId: string): Promise<void>;
 }
@@ -32,11 +32,13 @@ export class LocalKeyStore implements KeyStore {
   readonly #db: DatabaseSync;
   readonly #chain: Chain;
   readonly #secret: Buffer;
+  readonly #settings: PolicySettings;
 
-  constructor(db: DatabaseSync, chain: Chain, secret: string) {
+  constructor(db: DatabaseSync, chain: Chain, secret: string, settings: PolicySettings) {
     this.#db = db;
     this.#chain = chain;
     this.#secret = scryptSync(secret, "community-passport-keystore", 32);
+    this.#settings = settings;
   }
 
   async create(userId: string): Promise<Address> {
@@ -48,11 +50,8 @@ export class LocalKeyStore implements KeyStore {
     return address;
   }
 
-  async signTypedData(userId: string, typedData: RegistryTypedData, context: PolicyContext): Promise<Hex> {
-    checkPolicy(
-      { kind: "typedData", domain: typedData.domain, primaryType: typedData.primaryType, message: typedData.message },
-      context,
-    );
+  async signTypedData(userId: string, typedData: RegistryTypedData, member: MemberFacts): Promise<Hex> {
+    checkPolicy({ kind: "typedData", ...typedData }, this.#settings, member);
     const account = this.#account(userId);
     return typedData.primaryType === "Grant" ? account.signTypedData(typedData) : account.signTypedData(typedData);
   }
@@ -60,9 +59,9 @@ export class LocalKeyStore implements KeyStore {
   async sendTransaction(
     userId: string,
     transaction: { to: Address; data: Hex },
-    context: PolicyContext,
+    member: MemberFacts,
   ): Promise<void> {
-    checkPolicy({ kind: "transaction", ...transaction }, context);
+    checkPolicy({ kind: "transaction", ...transaction }, this.#settings, member);
     await this.#chain.sendFrom(this.#account(userId), transaction.to, transaction.data);
   }
 

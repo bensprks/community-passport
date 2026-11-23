@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Scope } from "@community-passport/grants";
-import { type Address, type Hex, getAddress, isHex } from "viem";
+import { type Address, type Hex, getAddress, isAddressEqual, isHex } from "viem";
 
 /** One thing a club may do as a member, and how the consent screen words it. */
 export type Permission = { label: string; target: Address; selector: Hex };
@@ -26,7 +26,11 @@ function fail(index: number, problem: string): never {
   throw new Error(`clubs file, entry ${index}: ${problem}`);
 }
 
-export function parseClubs(json: string): Map<string, Club> {
+/**
+ * Reads the list of clubs. `scopeTargets` are the only contracts a permission may name, so that no club can ask
+ * for a function on a token or on anything else the operator has not looked at.
+ */
+export function parseClubs(json: string, scopeTargets: readonly Address[]): Map<string, Club> {
   const entries: unknown = JSON.parse(json);
   if (!Array.isArray(entries)) throw new Error("clubs file: expected a list");
   const clubs = new Map<string, Club>();
@@ -48,7 +52,11 @@ export function parseClubs(json: string): Map<string, Club> {
         if (!isHex(permission.selector) || permission.selector.length !== 10) {
           fail(index, `"${permission.label}" needs a 4-byte selector`);
         }
-        return { label: permission.label, target: getAddress(permission.target), selector: permission.selector };
+        const target = getAddress(permission.target);
+        if (!scopeTargets.some((allowed) => isAddressEqual(allowed, target))) {
+          fail(index, `"${permission.label}" names ${target}, which is not one of the contracts grants may name`);
+        }
+        return { label: permission.label, target, selector: permission.selector };
       }),
       grantDays,
     });
@@ -56,8 +64,8 @@ export function parseClubs(json: string): Map<string, Club> {
   return clubs;
 }
 
-export function loadClubs(file: string): Map<string, Club> {
-  return parseClubs(readFileSync(file, "utf8"));
+export function loadClubs(file: string, scopeTargets: readonly Address[]): Map<string, Club> {
+  return parseClubs(readFileSync(file, "utf8"), scopeTargets);
 }
 
 /** The list of functions a member's grant to this club covers. */

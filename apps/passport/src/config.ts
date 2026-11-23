@@ -12,6 +12,8 @@ export type Config = {
   rpcUrl: string;
   grantRegistry: Address;
   accountFactory: Address;
+  /** The contracts a grant may name: the Lens feeds, graphs and so on. Never a token. */
+  scopeTargets: Address[];
   /** Pays the gas for creating Accounts and for submitting grants and revocations. Holds no user's rights. */
   relayerKey: Hex;
   /** Encrypts the development key store. */
@@ -36,6 +38,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, root: string = 
   const local: Record<string, string | number> = existsSync(localFile)
     ? JSON.parse(readFileSync(localFile, "utf8"))
     : {};
+  const localTargets = [local.feed, local.graph].filter(Boolean).join(",");
+  const scopeTargets = env.PASSPORT_SCOPE_TARGETS ?? (localTargets || required(env, "PASSPORT_SCOPE_TARGETS"));
 
   const relayerKey = required(env, "PASSPORT_RELAYER_KEY");
   if (!isHex(relayerKey) || relayerKey.length !== 66) throw new Error("PASSPORT_RELAYER_KEY is not a private key");
@@ -52,6 +56,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, root: string = 
     accountFactory: getAddress(
       String(env.PASSPORT_ACCOUNT_FACTORY ?? local.accountFactory ?? required(env, "PASSPORT_ACCOUNT_FACTORY")),
     ),
+    scopeTargets: scopeTargets.split(",").map((target) => getAddress(target.trim())),
     relayerKey,
     keyStoreSecret: required(env, "PASSPORT_KEYSTORE_SECRET"),
     clubsFile: resolve(root, env.PASSPORT_CLUBS_FILE ?? "clubs.json"),

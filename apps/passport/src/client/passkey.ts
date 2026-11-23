@@ -74,6 +74,12 @@ const actions: Record<string, (button: HTMLElement) => Promise<string>> = {
     return (await postJson("/account/handover", proof)).redirect;
   },
 
+  /** Finish a move that stopped half-way, with the passkey made the first time. */
+  async resume() {
+    const proof = await withExistingPasskey(signChallenge);
+    return (await postJson("/account/handover", proof)).redirect;
+  },
+
   /** Approve an app: sign its grant with the passkey-derived key. */
   async grant(button) {
     const uid = button.dataset.uid;

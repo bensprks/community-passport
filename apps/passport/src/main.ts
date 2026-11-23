@@ -10,7 +10,7 @@ import { LocalKeyStore } from "./keystore.ts";
 const config = loadConfig();
 const db = openDb(join(config.dataDir, "passport.sqlite"));
 const chain = createChain(config);
-const clubs = loadClubs(config.clubsFile);
+const clubs = loadClubs(config.clubsFile, config.scopeTargets);
 
 console.warn("Development key store and mailer in use: keys live in this server's database, codes are printed here.");
 const { app } = await createApp({
@@ -18,7 +18,7 @@ const { app } = await createApp({
   db,
   clubs,
   chain,
-  keyStore: new LocalKeyStore(db, chain, config.keyStoreSecret),
+  keyStore: new LocalKeyStore(db, chain, config.keyStoreSecret, config),
   mailer: new ConsoleMailer(),
 });
 

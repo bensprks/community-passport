@@ -14,6 +14,8 @@ export type User = {
   /** The address that owns the Account. */
   owner: Address;
   custody: Custody;
+  /** The member's own key, while a handover to it is under way. */
+  pendingOwner: Address | null;
 };
 
 const SCHEMA = `
@@ -23,6 +25,7 @@ CREATE TABLE IF NOT EXISTS users (
   account TEXT NOT NULL UNIQUE,
   owner TEXT NOT NULL,
   custody TEXT NOT NULL CHECK (custody IN ('passport', 'self')),
+  pending_owner TEXT,
   created_at INTEGER NOT NULL
 );
 -- The development key store. A key vendor replaces this table.
@@ -37,6 +40,7 @@ CREATE TABLE IF NOT EXISTS email_codes (
   code_hash TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
+  used INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 -- Challenges handed to a browser for its key to sign. Each works once.
@@ -49,13 +53,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
-);
--- Which apps a user connected. The registry says whether each grant is still live; this only says where to look.
-CREATE TABLE IF NOT EXISTS connections (
-  account TEXT NOT NULL,
-  client_id TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (account, client_id)
 );
 -- oidc-provider's own records: sessions, interactions, authorization codes.
 CREATE TABLE IF NOT EXISTS oidc (
@@ -83,10 +80,10 @@ export function openDb(path: string): DatabaseSync {
   return db;
 }
 
-/** Deletes records that have run out. Sign-in codes are kept for an hour, since they count towards the hourly limit. */
+/** Deletes records that have run out. Sign-in codes are kept for a day, since they count towards the daily limit. */
 export function purgeExpired(db: DatabaseSync): void {
   const time = now();
-  db.prepare("DELETE FROM email_codes WHERE created_at < ?").run(time - 3600);
+  db.prepare("DELETE FROM email_codes WHERE created_at < ?").run(time - 86400);
   db.prepare("DELETE FROM challenges WHERE expires_at <= ?").run(time);
   db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(time);
   db.prepare("DELETE FROM oidc WHERE expires_at <= ?").run(time);
@@ -106,24 +103,14 @@ export function setting(db: DatabaseSync, key: string, create: () => string): st
   return value;
 }
 
-export function userById(db: DatabaseSync, id: string): User | undefined {
-  return db.prepare("SELECT id, email, account, owner, custody FROM users WHERE id = ?").get(id) as User | undefined;
+const USER_COLUMNS = "id, email, account, owner, custody, pending_owner AS pendingOwner";
+
+function oneUser(db: DatabaseSync, column: "id" | "email" | "account" | "owner" | "pending_owner", value: string) {
+  return db.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE ${column} = ?`).get(value) as User | undefined;
 }
 
-export function userByEmail(db: DatabaseSync, email: string): User | undefined {
-  return db.prepare("SELECT id, email, account, owner, custody FROM users WHERE email = ?").get(email) as
-    | User
-    | undefined;
-}
-
-export function userByAccount(db: DatabaseSync, account: Address): User | undefined {
-  return db.prepare("SELECT id, email, account, owner, custody FROM users WHERE account = ?").get(account) as
-    | User
-    | undefined;
-}
-
-export function userByOwner(db: DatabaseSync, owner: Address): User | undefined {
-  return db.prepare("SELECT id, email, account, owner, custody FROM users WHERE owner = ?").get(owner) as
-    | User
-    | undefined;
-}
+export const userById = (db: DatabaseSync, id: string) => oneUser(db, "id", id);
+export const userByEmail = (db: DatabaseSync, email: string) => oneUser(db, "email", email);
+export const userByOwner = (db: DatabaseSync, owner: Address) => oneUser(db, "owner", owner);
+/** A member part-way through moving their Account to `owner`. */
+export const userByPendingOwner = (db: DatabaseSync, owner: Address) => oneUser(db, "pending_owner", owner);

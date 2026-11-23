@@ -49,7 +49,7 @@ export function loginPage(returnTo: string, message?: string): string {
   return page(
     "Sign in",
     `<h1>Sign in</h1>
-<p class="muted">One account for every community app. We'll email you a 6-digit code.</p>
+<p class="muted">One account for every community app. We'll email you an 8-digit code.</p>
 ${error(message)}
 <form method="post" action="/login/email">
   <input type="hidden" name="return" value="${escapeHtml(returnTo)}">
@@ -66,11 +66,11 @@ export function codePage(email: string, returnTo: string, message?: string): str
   return page(
     "Enter your code",
     `<h1>Enter your code</h1>
-<p class="muted">We sent a 6-digit code to ${escapeHtml(email)}. Only ever type it on this site.</p>
+<p class="muted">We sent an 8-digit code to ${escapeHtml(email)}. Only ever type it on this site.</p>
 ${error(message)}
 <form method="post" action="/login/code">
   <input type="hidden" name="return" value="${escapeHtml(returnTo)}">
-  <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus>
+  <input name="code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="one-time-code" required autofocus>
   <button class="primary">Sign in</button>
 </form>`,
   );
@@ -142,7 +142,22 @@ ${
   );
 }
 
-export function passkeyPage(user: User): string {
+/**
+ * `handover` says where a move to the member's own key stands: not begun, begun with nothing moved yet (they
+ * may still start over), or part of the Account already moved (only the passkey they made can finish it).
+ */
+export function passkeyPage(user: User, handover: "new" | "begun" | "moved"): string {
+  if (handover !== "new") {
+    return page(
+      "Finish securing your account",
+      `<h1>Finish securing your account</h1>
+<p>You made a passkey for this account, but the move to it did not finish.</p>
+<button type="button" class="primary" data-passkey="resume">Finish with that passkey</button>
+${handover === "begun" ? `<button type="button" data-passkey="create" data-name="${escapeHtml(user.email)}">Make a new passkey instead</button>` : ""}
+<p class="error" data-passkey-error hidden></p>`,
+      true,
+    );
+  }
   return page(
     "Secure with a passkey",
     `<h1>Secure your account with a passkey</h1>

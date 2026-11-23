@@ -13,6 +13,7 @@ import { grantRegistryAbi, hashScopes } from "@community-passport/grants";
 import {
   type Chain,
   type Config,
+  type KeyStore,
   LocalKeyStore,
   type Mailer,
   createApp,
@@ -89,6 +90,8 @@ describe("a club signs a member in through the Passport and acts for them on Len
   let account: Address;
   /** Stands in for the key a passkey derives in the member's browser. */
   const passkeyKey = privateKeyToAccount(generatePrivateKey());
+  /** Makes the key store's next transaction fail, either before it is sent or after it went through. */
+  let breakNextTransfer: { to: Address; when: "before" | "after" } | undefined;
 
   before(async () => {
     assert.ok(existsSync(localFile), "No local chain found. Run `pnpm chain` in another terminal first.");
@@ -102,6 +105,7 @@ describe("a club signs a member in through the Passport and acts for them on Len
       rpcUrl: local.rpcUrl,
       grantRegistry: local.grantRegistry,
       accountFactory: local.accountFactory,
+      scopeTargets: [local.feed, local.graph],
       relayerKey: RELAYER_KEY,
       keyStoreSecret: "e2e",
       clubsFile: "",
@@ -125,15 +129,23 @@ describe("a club signs a member in through the Passport and acts for them on Len
           ],
         },
       ]),
+      config.scopeTargets,
     );
-    const { app } = await createApp({
-      config,
-      db,
-      clubs,
-      chain,
-      keyStore: new LocalKeyStore(db, chain, config.keyStoreSecret),
-      mailer: outbox,
-    });
+    // The real key store, with a way to cut a transaction short like a crash or a dropped connection would.
+    const store = new LocalKeyStore(db, chain, config.keyStoreSecret, config);
+    const keyStore: KeyStore = {
+      create: (userId) => store.create(userId),
+      signTypedData: (userId, typedData, member) => store.signTypedData(userId, typedData, member),
+      destroy: (userId) => store.destroy(userId),
+      async sendTransaction(userId, transaction, member) {
+        const failure = breakNextTransfer && isAddressEqual(breakNextTransfer.to, transaction.to) ? breakNextTransfer : undefined;
+        if (failure) breakNextTransfer = undefined;
+        if (failure?.when === "before") throw new Error("simulated: the transaction was never sent");
+        await store.sendTransaction(userId, transaction, member);
+        if (failure?.when === "after") throw new Error("simulated: the connection dropped after the transaction went through");
+      },
+    };
+    const { app } = await createApp({ config, db, clubs, chain, keyStore, mailer: outbox });
     server = app.listen(port, "127.0.0.1");
     browser = new Browser(config.issuer);
     clubClient = createWalletClient({
@@ -254,10 +266,10 @@ describe("a club signs a member in through the Passport and acts for them on Len
     const codePage = await browser.postForm("/login/email", { email, return: returnTo });
     assert.match(codePage.body, /Enter your code/);
     const code = outbox.codes.get(email);
-    assert.match(code ?? "", /^\d{6}$/);
+    assert.match(code ?? "", /^\d{8}$/);
 
     // A wrong code gets nowhere.
-    const wrong = await browser.postForm("/login/code", { code: code === "000000" ? "111111" : "000000", return: returnTo });
+    const wrong = await browser.postForm("/login/code", { code: code === "00000000" ? "11111111" : "00000000", return: returnTo });
     assert.equal(wrong.status, 401);
 
     // The right one signs in, creates the member's Lens Account, and lands on the consent screen.
@@ -357,18 +369,41 @@ describe("a club signs a member in through the Passport and acts for them on Len
     await assert.rejects(clubExecutes(local.feed, post("lens://e2e/after-revoke")), /GrantNotActive/);
   });
 
-  test("the member takes the key over: the Account and its proxy admin move to their own key", async () => {
+  /** Asks the Passport to hand the Account to `key`, proving the browser holds it. */
+  async function handOverTo(key: typeof passkeyKey) {
     const { message } = await browser.getJson<{ message: string }>("/passkey/challenge");
-    const handover = await browser.postJson("/account/handover", {
-      address: passkeyKey.address,
-      signature: await passkeyKey.signMessage({ message }),
-    });
-    assert.equal(handover.status, 200);
+    return browser.postJson("/account/handover", { address: key.address, signature: await key.signMessage({ message }) });
+  }
+  const keysHeld = () => (db.prepare("SELECT COUNT(*) AS count FROM keys").get() as { count: number }).count;
 
+  test("a handover that stops half-way can only be finished with the same passkey", async () => {
+    const proxyAdmin = await chain.proxyAdminOf(account);
+    assert.match((await browser.get("/account/passkey")).body, /Create a passkey and move my account/);
+
+    // The proxy admin moves, then the Account's own transfer fails.
+    breakNextTransfer = { to: account, when: "before" };
+    assert.equal((await handOverTo(passkeyKey)).status, 500);
+    assert.ok(isAddressEqual(await chain.ownerOf(proxyAdmin), passkeyKey.address));
+    assert.ok(!isAddressEqual(await chain.ownerOf(account), passkeyKey.address), "the Passport's key still owns the Account");
+    assert.equal(keysHeld(), 1, "and the Passport still holds that key");
+
+    const page = (await browser.get("/account/passkey")).body;
+    assert.match(page, /Finish with that passkey/);
+    assert.doesNotMatch(page, /Make a new passkey instead/);
+    const otherPasskey = privateKeyToAccount(generatePrivateKey());
+    assert.equal((await handOverTo(otherPasskey)).status, 409, "another passkey cannot finish it");
+  });
+
+  test("the member takes the key over: the Account and its proxy admin move to their own key", async () => {
+    // This time everything goes through on the chain, but the Passport never hears back.
+    breakNextTransfer = { to: account, when: "after" };
+    assert.equal((await handOverTo(passkeyKey)).status, 500);
     assert.ok(isAddressEqual(await chain.ownerOf(account), passkeyKey.address));
     assert.ok(isAddressEqual(await chain.ownerOf(await chain.proxyAdminOf(account)), passkeyKey.address));
-    const keysLeft = db.prepare("SELECT COUNT(*) AS count FROM keys").get() as { count: number };
-    assert.equal(keysLeft.count, 0, "the Passport holds no key for this member any more");
+
+    // The Passport reads the chain the next time it sees the member, and records what happened.
+    assert.match((await browser.get("/account")).body, /Your passkey controls this account/);
+    assert.equal(keysHeld(), 0, "the Passport holds no key for this member any more");
   });
 
   test("after that, an email code alone does not sign in", async () => {

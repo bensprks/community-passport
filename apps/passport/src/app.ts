@@ -25,10 +25,10 @@ import {
 import { type Chain, lensAbi } from "./chain.ts";
 import { type Club, clubScopes } from "./clubs.ts";
 import type { Config } from "./config.ts";
-import { type User, now, userByEmail, userById, userByOwner } from "./db.ts";
+import { type User, now, userByEmail, userById, userByOwner, userByPendingOwner } from "./db.ts";
 import type { KeyStore } from "./keystore.ts";
 import { createProvider } from "./oidc.ts";
-import { type PolicyContext, PolicyError } from "./policy.ts";
+import { type MemberFacts, PolicyError } from "./policy.ts";
 import * as views from "./views.ts";
 
 export type Services = {
@@ -68,7 +68,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
   const { config, db, clubs, chain, keyStore, mailer } = services;
   const provider = createProvider(config, db, clubs, chain);
   const secure = config.issuer.startsWith("https://");
-  const host = new URL(config.issuer).host;
+  const { host, origin } = new URL(config.issuer);
 
   // The browser script for the passkey pages, bundled once at start.
   const bundle = await build({
@@ -84,6 +84,15 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   const app = express();
   app.disable("x-powered-by");
+  // The Passport's own forms and scripts are the only pages that may post to it. Cookies are SameSite=Lax, which
+  // stops other sites; this also stops a sibling subdomain. (The sign-in protocol's own endpoints are not ours.)
+  app.use((req, _res, next) => {
+    const ours = /^\/(login|logout|interaction|account)(\/|$)/.test(req.path);
+    if (req.method === "POST" && ours && req.headers.origin && req.headers.origin !== origin) {
+      throw new HttpError(403, "That request did not come from this site.");
+    }
+    next();
+  });
   const form = express.urlencoded({ extended: false });
   const json = express.json();
 
@@ -94,25 +103,73 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     );
   }
 
-  function signedIn(req: Request): { session: Session; user: User } | undefined {
+  async function signedIn(req: Request): Promise<{ session: Session; user: User } | undefined> {
     const session = findSession(db, parseCookies(req.headers.cookie).pp_session);
     const user = session && userById(db, session.userId);
-    return session && user ? { session, user } : undefined;
+    return session && user ? { session, user: await settled(user, session.id) } : undefined;
   }
 
   function signIn(res: Response, user: User): void {
     setCookie(res, "pp_session", createSession(db, user.id).id, SESSION_TTL);
   }
 
-  /** What the key store may sign for this member right now, see policy.ts. */
-  async function policyContext(user: User, session: Session): Promise<PolicyContext> {
+  /** What the key store is told about this member with each request, see policy.ts. */
+  async function memberFacts(user: User, session: Session): Promise<MemberFacts> {
     return {
-      chainId: config.chainId,
-      grantRegistry: config.grantRegistry,
       account: user.account,
       proxyAdmin: await chain.proxyAdminOf(user.account),
       freshLogin: now() - session.createdAt <= FRESH_LOGIN,
     };
+  }
+
+  // ---------------------------------------------------------------- Handing an Account to its member
+  //
+  // Two things change hands, each with one transaction from the key the Passport holds: the Account's proxy admin
+  // (which could otherwise change the code the Account runs), then the Account. Either can fail or be cut short,
+  // so the member's key is written down first (`pendingOwner`) and every step asks the chain what is already done.
+
+  const ownedByPassport = async (user: User, target: Address) => isAddressEqual(await chain.ownerOf(target), user.owner);
+
+  /** Records that a member holds their own key, forgets the Passport's, and ends their other sessions. */
+  async function recordHandover(user: User, newOwner: Address, keepSession?: string): Promise<User> {
+    db.prepare("UPDATE users SET owner = ?, custody = 'self', pending_owner = NULL WHERE id = ?").run(newOwner, user.id);
+    await keyStore.destroy(user.id);
+    // Sessions that an email code opened elsewhere end here: from now on only the new key signs in.
+    destroyOtherSessions(db, user.id, keepSession);
+    return { ...user, owner: newOwner, custody: "self", pendingOwner: null };
+  }
+
+  /**
+   * If a handover reached the chain but was never recorded here (the server stopped in between), records it now.
+   * The Account moves last, so once it belongs to the member's key the whole handover is done.
+   */
+  async function settled(user: User, keepSession?: string): Promise<User> {
+    if (user.custody !== "passport" || !user.pendingOwner) return user;
+    if (!isAddressEqual(await chain.ownerOf(user.account), user.pendingOwner)) return user;
+    return recordHandover(user, user.pendingOwner, keepSession);
+  }
+
+  /** Where a member's handover stands: not begun, begun with nothing moved, or part of the Account moved. */
+  async function handoverState(user: User, proxyAdmin: Address): Promise<"new" | "begun" | "moved"> {
+    if (!user.pendingOwner) return "new";
+    const untouched = (await ownedByPassport(user, proxyAdmin)) && (await ownedByPassport(user, user.account));
+    return untouched ? "begun" : "moved";
+  }
+
+  async function handOver(user: User, newOwner: Address, session: Session): Promise<void> {
+    const member = await memberFacts(user, session);
+    // Once anything has moved to one key, no other key can finish the job.
+    if (!isAddressEqual(user.pendingOwner ?? newOwner, newOwner) && (await handoverState(user, member.proxyAdmin)) === "moved") {
+      throw new HttpError(409, "Finish with the passkey you already made for this account.");
+    }
+    db.prepare("UPDATE users SET pending_owner = ? WHERE id = ?").run(newOwner, user.id);
+
+    const data = encodeFunctionData({ abi: lensAbi, functionName: "transferOwnership", args: [newOwner] });
+    for (const target of [member.proxyAdmin, user.account]) {
+      if (await ownedByPassport(user, target)) await keyStore.sendTransaction(user.id, { to: target, data }, member);
+      if (!isAddressEqual(await chain.ownerOf(target), newOwner)) throw new Error(`${target} did not change owner`);
+    }
+    await recordHandover(user, newOwner, session.id);
   }
 
   function clubOf(clientId: unknown): Club {
@@ -169,6 +226,8 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     res.send(views.codePage(email, returnTo));
   });
 
+  const creating = new Set<string>();
+
   app.post("/login/code", form, async (req, res) => {
     const returnTo = safeReturn(req.body.return);
     const pendingId = parseCookies(req.headers.cookie).pp_login ?? "";
@@ -181,24 +240,29 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     let user = userByEmail(db, email);
     if (!user) {
       // A first sign-in: a key in the key store, and a Lens Account that key owns, with the registry as manager.
+      // One at a time per address, so that two codes used at once cannot make two Accounts.
+      if (creating.has(email)) throw new HttpError(409, "Your account is being set up. Try again in a moment.");
+      creating.add(email);
       const id = randomId();
-      const owner = await keyStore.create(id);
-      let account: Address;
       try {
-        account = await chain.createAccount(owner);
+        const owner = await keyStore.create(id);
+        const account = await chain.createAccount(owner);
+        db.prepare("INSERT INTO users (id, email, account, owner, custody, created_at) VALUES (?, ?, ?, ?, 'passport', ?)").run(
+          id,
+          email,
+          account,
+          owner,
+          now(),
+        );
+        user = { id, email, account, owner, custody: "passport", pendingOwner: null };
       } catch (error) {
         await keyStore.destroy(id);
         throw error;
+      } finally {
+        creating.delete(email);
       }
-      db.prepare("INSERT INTO users (id, email, account, owner, custody, created_at) VALUES (?, ?, ?, ?, 'passport', ?)").run(
-        id,
-        email,
-        account,
-        owner,
-        now(),
-      );
-      user = { id, email, account, owner, custody: "passport" };
     }
+    user = await settled(user);
     // Once a member holds their own key, an inbox is not enough to sign in as them.
     if (user.custody === "self") return void res.send(views.passkeyRequiredPage(returnTo));
     signIn(res, user);
@@ -213,7 +277,8 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   app.post("/login/passkey", json, async (req, res) => {
     const owner = await provenAddress(req, res);
-    const user = userByOwner(db, owner);
+    const found = userByOwner(db, owner) ?? userByPendingOwner(db, owner);
+    const user = found && (await settled(found));
     // The chain has the last word on who owns the Account.
     if (!user || user.custody !== "self" || !isAddressEqual(await chain.ownerOf(user.account), owner)) {
       throw new HttpError(401, "No account is controlled by that passkey.");
@@ -233,7 +298,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   app.get("/interaction/:uid", async (req, res) => {
     const details = await provider.interactionDetails(req, res);
-    const current = signedIn(req);
+    const current = await signedIn(req);
     if (!current) return void res.redirect(303, `/login?return=/interaction/${details.uid}`);
     if (details.prompt.name === "login") {
       return void (await provider.interactionFinished(
@@ -251,7 +316,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
   /** For a member who holds their own key: the grant for their passkey to sign. */
   app.get("/interaction/:uid/grant-request", async (req, res) => {
     const details = await provider.interactionDetails(req, res);
-    const current = signedIn(req);
+    const current = await signedIn(req);
     if (!current) throw new HttpError(401, "Sign in first.");
     const grant = await newGrant(current.user, clubOf(details.params.client_id));
     res.type("json").send(toJson(grantTypedData(config.chainId, config.grantRegistry, grant)));
@@ -259,7 +324,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   app.post("/interaction/:uid/allow", form, json, async (req, res) => {
     const details = await provider.interactionDetails(req, res);
-    const current = signedIn(req);
+    const current = await signedIn(req);
     if (!current || details.session?.accountId !== current.user.account) throw new HttpError(401, "Sign in first.");
     const { user, session } = current;
     const club = clubOf(details.params.client_id);
@@ -268,7 +333,7 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     let signature: Hex;
     if (user.custody === "passport") {
       const typedData = grantTypedData(config.chainId, config.grantRegistry, grant);
-      signature = await keyStore.signTypedData(user.id, typedData, await policyContext(user, session));
+      signature = await keyStore.signTypedData(user.id, typedData, await memberFacts(user, session));
     } else {
       // The member's passkey signed in their browser. Only the three numbers it chose are taken from the request,
       // and never a longer grant than this club gets; the registry checks the signature against all of it.
@@ -278,12 +343,14 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
       grant = { ...grant, expiry, nonce: toBigInt(req.body.nonce), deadline: toBigInt(req.body.deadline) };
       signature = req.body.signature;
     }
-    await chain.submitGrant({ ...grant, signature });
-    db.prepare("INSERT OR REPLACE INTO connections (account, client_id, created_at) VALUES (?, ?, ?)").run(
-      user.account,
-      club.clientId,
-      now(),
-    );
+    try {
+      await chain.submitGrant({ ...grant, signature });
+    } catch (error) {
+      // Anyone may submit a signed grant, so someone else may have got this one in first. What counts is that
+      // the grant the member approved is there.
+      const status = await chain.grantStatus(user.account, club.grantee, grant.scopes);
+      if (!status.live || status.expiry !== grant.expiry) throw error;
+    }
 
     const oidcGrant = new provider.Grant({ accountId: user.account, clientId: club.clientId });
     oidcGrant.addOIDCScope("openid");
@@ -306,16 +373,11 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
   // ---------------------------------------------------------------- A member's own page
 
   app.get("/account", async (req, res) => {
-    const current = signedIn(req);
+    const current = await signedIn(req);
     if (!current) return void res.redirect(303, "/login?return=/account");
-    const rows = db.prepare("SELECT client_id FROM connections WHERE account = ?").all(current.user.account) as {
-      client_id: string;
-    }[];
+    // The registry says which apps are connected. The Passport keeps no list of its own that could disagree.
     const connections: views.Connection[] = [];
-    for (const { client_id } of rows) {
-      const club = clubs.get(client_id);
-      if (!club) continue;
-      // The registry says whether an app is still connected, whatever this database remembers.
+    for (const club of clubs.values()) {
       const status = await chain.grantStatus(current.user.account, club.grantee, clubScopes(club));
       if (status.live) connections.push({ club, expiry: new Date(Number(status.expiry) * 1000) });
     }
@@ -329,14 +391,14 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
 
   /** For a member who holds their own key: the revocation for their passkey to sign. */
   app.get("/account/revoke-request", async (req, res) => {
-    const current = signedIn(req);
+    const current = await signedIn(req);
     if (!current) throw new HttpError(401, "Sign in first.");
     const revoke = await newRevoke(current.user, clubOf(req.query.client));
     res.type("json").send(toJson(revokeTypedData(config.chainId, config.grantRegistry, revoke)));
   });
 
   app.post("/account/revoke", form, json, async (req, res) => {
-    const current = signedIn(req);
+    const current = await signedIn(req);
     if (!current) throw new HttpError(401, "Sign in first.");
     const { user, session } = current;
     const club = clubOf(req.body.client);
@@ -345,57 +407,40 @@ export async function createApp(services: Services): Promise<{ app: express.Expr
     let signature: Hex;
     if (user.custody === "passport") {
       const typedData = revokeTypedData(config.chainId, config.grantRegistry, revoke);
-      signature = await keyStore.signTypedData(user.id, typedData, await policyContext(user, session));
+      signature = await keyStore.signTypedData(user.id, typedData, await memberFacts(user, session));
     } else {
       if (!isHex(req.body.signature)) throw new HttpError(400, "Missing signature.");
       revoke = { ...revoke, nonce: toBigInt(req.body.nonce), deadline: toBigInt(req.body.deadline) };
       signature = req.body.signature;
     }
-    await chain.submitRevoke({ ...revoke, signature });
-    db.prepare("DELETE FROM connections WHERE account = ? AND client_id = ?").run(user.account, club.clientId);
+    try {
+      await chain.submitRevoke({ ...revoke, signature });
+    } catch (error) {
+      // As with grants: if the grant is gone, the member has what they asked for.
+      if ((await chain.grantStatus(user.account, club.grantee, clubScopes(club))).live) throw error;
+    }
     if (user.custody === "passport") return void res.redirect(303, "/account");
     res.json({ redirect: "/account" });
   });
 
   // ---------------------------------------------------------------- Taking the key over
 
-  app.get("/account/passkey", (req, res) => {
-    const current = signedIn(req);
+  app.get("/account/passkey", async (req, res) => {
+    const current = await signedIn(req);
     if (!current) return void res.redirect(303, "/login?return=/account/passkey");
     if (current.user.custody === "self") return void res.redirect(303, "/account");
     // Moving an Account to a new owner takes a sign-in from moments ago, not an old session.
-    if (now() - current.session.createdAt > FRESH_LOGIN) {
-      destroySession(db, current.session.id);
-      return void res.redirect(303, "/login?return=/account/passkey");
-    }
-    res.send(views.passkeyPage(current.user));
+    if (now() - current.session.createdAt > FRESH_LOGIN) return void res.redirect(303, "/login?return=/account/passkey");
+    const proxyAdmin = await chain.proxyAdminOf(current.user.account);
+    res.send(views.passkeyPage(current.user, await handoverState(current.user, proxyAdmin)));
   });
 
-  /**
-   * Hands a member's Account to the key their passkey derives. Two things change hands: the Account's proxy admin
-   * (which could otherwise change the code the Account runs), then the Account itself. Afterwards the Passport
-   * holds nothing for this member.
-   */
+  /** Hands a member's Account to the key their passkey derives. Afterwards the Passport holds nothing for them. */
   app.post("/account/handover", json, async (req, res) => {
-    const current = signedIn(req);
+    const current = await signedIn(req);
     if (!current) throw new HttpError(401, "Sign in first.");
-    const { user, session } = current;
-    if (user.custody !== "passport") throw new HttpError(409, "This account already has its own key.");
-    const newOwner = await provenAddress(req, res);
-
-    const context = await policyContext(user, session);
-    const data = encodeFunctionData({ abi: lensAbi, functionName: "transferOwnership", args: [newOwner] });
-    // The proxy admin first: if anything fails after it, the Passport still owns the Account and can try again.
-    if (!isAddressEqual(await chain.ownerOf(context.proxyAdmin), newOwner)) {
-      await keyStore.sendTransaction(user.id, { to: context.proxyAdmin, data }, context);
-    }
-    await keyStore.sendTransaction(user.id, { to: user.account, data }, context);
-    if (!isAddressEqual(await chain.ownerOf(user.account), newOwner)) throw new Error("the Account did not change owner");
-
-    db.prepare("UPDATE users SET owner = ?, custody = 'self' WHERE id = ?").run(newOwner, user.id);
-    await keyStore.destroy(user.id);
-    // Sessions that an email code opened on other devices end here: from now on only the new key signs in.
-    destroyOtherSessions(db, user.id, session.id);
+    if (current.user.custody !== "passport") throw new HttpError(409, "This account already has its own key.");
+    await handOver(current.user, await provenAddress(req, res), current.session);
     res.json({ redirect: "/account" });
   });
 
