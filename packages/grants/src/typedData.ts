@@ -27,6 +27,14 @@ export const REVOKE_TYPES = {
   ],
 } as const;
 
+export const REVOKE_ALL_TYPES = {
+  RevokeAll: [
+    { name: "account", type: "address" },
+    { name: "nonce", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+  ],
+} as const;
+
 /** What an Account's owner signs to let `grantee` call `scopes` as the Account until `expiry`. */
 export type GrantMessage = {
   account: Address;
@@ -42,6 +50,8 @@ export type GrantMessage = {
 
 export type RevokeMessage = Pick<GrantMessage, "account" | "grantee" | "nonce" | "deadline">;
 
+export type RevokeAllMessage = Pick<GrantMessage, "account" | "nonce" | "deadline">;
+
 /** The registry's EIP-712 domain. It ties a signature to one chain and one registry. */
 export function registryDomain(chainId: number, registry: Address) {
   return { name: "GrantRegistry", version: "1", chainId, verifyingContract: registry } as const;
@@ -55,6 +65,11 @@ export function grantTypedData(chainId: number, registry: Address, message: Gran
 /** The typed data to pass to a wallet's `signTypedData` for `GrantRegistry.revokeWithSig`. */
 export function revokeTypedData(chainId: number, registry: Address, message: RevokeMessage) {
   return { domain: registryDomain(chainId, registry), types: REVOKE_TYPES, primaryType: "Revoke", message } as const;
+}
+
+/** The typed data to pass to a wallet's `signTypedData` for `GrantRegistry.revokeAllWithSig`: it ends every grant. */
+export function revokeAllTypedData(chainId: number, registry: Address, message: RevokeAllMessage) {
+  return { domain: registryDomain(chainId, registry), types: REVOKE_ALL_TYPES, primaryType: "RevokeAll", message } as const;
 }
 
 /** The registry accepts nonces in any order, so a random 256-bit number never collides or blocks another. */

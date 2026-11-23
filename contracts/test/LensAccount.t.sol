@@ -156,6 +156,30 @@ contract LensAccountTest is RegistryTestBase {
         assertEq(target.calls(), 0);
     }
 
+    // Removing the registry alone leaves old grants waiting: they work again if it is added back. Ending every
+    // grant first is what makes turning app access off final.
+    function test_AddingTheRegistryBack_BringsGrantsBack_UnlessTheyWereAllEnded() public {
+        _grant(account, _scope(address(target), MockTarget.ping.selector));
+        AccountManagerPermissions memory executeOnly = AccountManagerPermissions(true, false, false, false);
+
+        vm.startPrank(owner);
+        account.removeAccountManager(address(registry));
+        account.addAccountManager(address(registry), executeOnly);
+        vm.stopPrank();
+        vm.prank(club);
+        registry.execute(address(account), address(target), abi.encodeCall(MockTarget.ping, (7)));
+        assertEq(target.calls(), 1, "the old grant is back");
+
+        vm.startPrank(owner);
+        registry.revokeAll(address(account));
+        account.removeAccountManager(address(registry));
+        account.addAccountManager(address(registry), executeOnly);
+        vm.stopPrank();
+        vm.prank(club);
+        vm.expectRevert(IGrantRegistry.GrantNotActive.selector);
+        registry.execute(address(account), address(target), abi.encodeCall(MockTarget.ping, (7)));
+    }
+
     function test_AnAccountThatNeverAddedTheRegistry_IsOutOfReach() public {
         LensAccount optedOut = _deployAccount(owner, false);
         _grant(optedOut, _scope(address(target), MockTarget.ping.selector));

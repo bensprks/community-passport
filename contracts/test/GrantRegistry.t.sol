@@ -347,6 +347,57 @@ contract GrantRegistryTest is RegistryTestBase {
         registry.execute(address(account), address(target), abi.encodeCall(MockTarget.ping, (1)));
     }
 
+    function test_RevokeAll_EndsEveryGrantAndLetsNewOnesBeMade() public {
+        _grant();
+        address otherClub = makeAddr("OTHER_CLUB");
+        vm.prank(owner);
+        registry.grant(address(account), otherClub, scopeId, expiry);
+
+        vm.expectEmit(address(registry));
+        emit IGrantRegistry.RevokedAll(address(account));
+        vm.prank(owner);
+        registry.revokeAll(address(account));
+
+        (bytes32 grantedScope, uint64 grantedExpiry) = registry.grantOf(address(account), club);
+        assertEq(grantedScope, bytes32(0));
+        assertEq(grantedExpiry, 0);
+        assertFalse(registry.isAllowed(address(account), otherClub, address(target), MockTarget.ping.selector));
+        vm.prank(club);
+        vm.expectRevert(IGrantRegistry.GrantNotActive.selector);
+        registry.execute(address(account), address(target), abi.encodeCall(MockTarget.ping, (1)));
+
+        // A grant made afterwards works, and the old one to the other club stays ended.
+        _grant();
+        vm.prank(club);
+        registry.execute(address(account), address(target), abi.encodeCall(MockTarget.ping, (1)));
+        assertFalse(registry.isAllowed(address(account), otherClub, address(target), MockTarget.ping.selector));
+    }
+
+    function test_RevokeAll_RevertsWhen_CallerIsNotTheOwner() public {
+        _grant();
+        vm.prank(club);
+        vm.expectRevert(IGrantRegistry.NotOwner.selector);
+        registry.revokeAll(address(account));
+    }
+
+    function test_RevokeAllWithSig_SubmittedByAnyone() public {
+        _grant();
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory signature = _signRevokeAll(OWNER_KEY, address(account), 9, deadline);
+        vm.prank(stranger);
+        registry.revokeAllWithSig(address(account), 9, deadline, signature);
+        assertFalse(registry.isAllowed(address(account), club, address(target), MockTarget.ping.selector));
+
+        // Not by someone else's signature, and a signature to end one grant does not end them all.
+        _grant();
+        signature = _signRevokeAll(0xBAD, address(account), 10, deadline);
+        vm.expectRevert(IGrantRegistry.InvalidSignature.selector);
+        registry.revokeAllWithSig(address(account), 10, deadline, signature);
+        signature = _signRevoke(OWNER_KEY, address(account), club, 11, deadline);
+        vm.expectRevert(IGrantRegistry.InvalidSignature.selector);
+        registry.revokeAllWithSig(address(account), 11, deadline, signature);
+    }
+
     function test_Revoke_ByTheGranteeItself() public {
         _grant();
         vm.prank(club);
