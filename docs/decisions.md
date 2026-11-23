@@ -30,22 +30,24 @@
 4. **Which key vendor?** It must hold keys in a sealed server, enforce the signing rule, and see the member's approval for itself: the acceptance test in [Passport](passport.md). Not yet tested against any vendor.
 5. **Is recovery after a handover needed from the start?** Today a lost passkey, with no synced copy, is a lost Account. A recovery address would fix it and adds a little contract work on the Lens side.
 
+6. **A key vendor, or accounts rooted in an email?** The second removes the vendor and its running cost, and adds a reply per device, a proof system to trust, and about 0.2 MON per device. See [Accounts rooted in an email](email-accounts.md).
+
 **Product**
 
-6. **The Passport's domain.** Every passkey is tied to it for good.
-7. **How long should a grant last?** 90 days here, renewed at sign-in once half is gone. A year is the registry's limit.
-8. **Does a club need more than the Account's address at sign-in?** Today it gets nothing else. An email address would need the member's say-so.
-9. **Account deletion.** Apple requires apps that create accounts to offer deletion. One answer for a Lens Account: the Passport forgets the member and their key, and the Account stays onchain with no owner.
-10. **Should existing Lens accounts be invited in?** If yes, owners with no MON need the [Lens change](lens-changes.md).
+7. **The Passport's domain.** Every passkey is tied to it for good.
+8. **How long should a grant last?** 90 days here, renewed at sign-in once half is gone. A year is the registry's limit.
+9. **Does a club need more than the Account's address at sign-in?** Today it gets nothing else. An email address would need the member's say-so.
+10. **Account deletion.** Apple requires apps that create accounts to offer deletion. One answer for a Lens Account: the Passport forgets the member and their key, and the Account stays onchain with no owner.
+11. **Should existing Lens accounts be invited in?** If yes, owners with no MON need the [Lens change](lens-changes.md).
 
 **Money**
 
-11. **Who funds the relayer?** About 0.16 MON per new member, so about 1,600 MON per 10,000. Sign-up needs a cap so that scripts cannot drain it.
-12. **Who pays for members' actions?** Today each club pays the gas for what it does as its members: about 0.06 MON a post. Sponsoring clubs would be a separate piece.
+12. **Who funds the relayer?** About 0.16 MON per new member, so about 1,600 MON per 10,000. Sign-up needs a cap so that scripts cannot drain it.
+13. **Who pays for members' actions?** Today each club pays the gas for what it does as its members: about 0.06 MON a post. Sponsoring clubs would be a separate piece.
 
 **Contract**
 
-13. **Upgradeable, or fixed versions that members opt into?** Today the registry is upgradeable behind a delay, and a member can leave in one tap. The alternative is a registry that can never change, with each new version a separate contract that members choose to add. That removes the upgrade risk and makes every fix a migration. Fixed versions suit a first, narrow permission well.
-14. **Checking arguments.** The registry checks the contract and the function only. Likes and votes go through one Lens contract that takes the real action as an argument, so granting them needs the registry to check that argument. Not built.
-15. **Retiring an app's key.** Only a member, or the key itself, can end that key's grants. When a club replaces its developer, who ends the old key's grants for every member: the guardian, the operator, or each member?
-16. **A way out that does not depend on the Passport's domain.** A passkey's key is derived on the Passport's page. Offer a handover to a wallet the member controls elsewhere, and a recovery path that works if the domain is gone.
+14. **Upgradeable, or fixed versions that members opt into?** Today the registry is upgradeable behind a delay, and a member can leave in one tap. The alternative is a registry that can never change, with each new version a separate contract that members choose to add. That removes the upgrade risk and makes every fix a migration. Fixed versions suit a first, narrow permission well.
+15. **Checking arguments.** The registry checks the contract and the function only. Likes and votes go through one Lens contract that takes the real action as an argument, so granting them needs the registry to check that argument. Not built.
+16. **Retiring an app's key.** Only a member, or the key itself, can end that key's grants. When a club replaces its developer, who ends the old key's grants for every member: the guardian, the operator, or each member?
+17. **A way out that does not depend on the Passport's domain.** A passkey's key is derived on the Passport's page. Offer a handover to a wallet the member controls elsewhere, and a recovery path that works if the domain is gone.
